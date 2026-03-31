@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Multi-polling seed states
     let seenTxKeys = new Set();
     let seedModeCoins = new Set(); // Coins that need initial fetch without tracking
+    let marketStrengths = {}; // { 'NFT': { strength: 120, askRatio: 0.45 } }
     
     const fmtNum = num => Math.floor(Math.max(0, num)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     
@@ -28,6 +29,13 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const saveTrackers = () => localStorage.setItem('bithumb_trackers_v2', JSON.stringify(trackers));
+
+    // Compatibility check for older v2 trackers
+    trackers.forEach(t => {
+        if(t.baseTotalSpeedPerMin === undefined) {
+            t.baseTotalSpeedPerMin = t.baseSpeedPerMin ? t.baseSpeedPerMin * 2 : 10000;
+        }
+    });
 
     // === Sync UI Logic ===
     const updateInputLabels = () => {
@@ -110,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
             remainingQty: qty,
             accumulatedVol: 0,
             startTime: Date.now(),
-            baseSpeedPerMin: baseSpeed,
+            baseTotalSpeedPerMin: baseSpeed,
             status: 'active'
         };
 
@@ -151,14 +159,24 @@ document.addEventListener('DOMContentLoaded', () => {
             // Calculate Hybrid Speed
             const elapsedMins = (now - t.startTime) / 60000;
             let liveSpeed = 0;
-            let compositeSpeed = t.baseSpeedPerMin;
+            
+            // 실시간 체결강도를 통해 매수매도벽 파괴율(askRatio) 반영
+            let currentAskRatio = 0.5; // 기본 체결강도 100% 상황
+            let strengthStr = "측정 중...";
+            if (marketStrengths[t.coin]) {
+                currentAskRatio = marketStrengths[t.coin].askRatio;
+                strengthStr = `${marketStrengths[t.coin].strength.toFixed(1)}%`;
+            }
+            if (currentAskRatio <= 0.05) currentAskRatio = 0.05; // 최소 고정물량
+
+            // 내 물량을 까먹는 기준 속도 (총 월간 스피드 * 지금 터지는 시장가 매도 비율)
+            let effectiveBaseSpeed = (t.baseTotalSpeedPerMin || 1) * currentAskRatio;
+            let compositeSpeed = effectiveBaseSpeed;
             
             if (elapsedMins > 0.5) {
                 liveSpeed = t.accumulatedVol / elapsedMins;
-                // Add some live weight dynamically
-                // If live speed is non-zero, let's mix it 50/50. If 0, mostly rely on base.
-                const liveWeight = elapsedMins > 60 ? 0.7 : 0.4; // More weight if tracked longer
-                compositeSpeed = (t.baseSpeedPerMin * (1 - liveWeight)) + (liveSpeed * liveWeight);
+                const liveWeight = elapsedMins > 60 ? 0.7 : 0.4;
+                compositeSpeed = (effectiveBaseSpeed * (1 - liveWeight)) + (liveSpeed * liveWeight);
             }
             if (compositeSpeed <= 0) compositeSpeed = 1;
             
@@ -210,13 +228,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         <strong class="stat-value">${fmtNum(t.accumulatedVol)}</strong>
                     </div>
                     <div class="stat-box">
-                        <span class="stat-title">라이브 체결 속도 (분당)</span>
-                        <strong class="stat-value">${fmtNum(liveSpeed)}</strong>
+                        <span class="stat-title">분당 체결 속도 / 시장 체결강도</span>
+                        <strong class="stat-value">${fmtNum(liveSpeed)} / ${strengthStr}</strong>
                     </div>
                     <div class="prediction-box stat-box">
                         <span class="pred-title">예상 체결 대기 시간 (하이브리드 엔진)</span>
                         <div class="highlight-neon">${timeStr}</div>
-                        <span class="base-speed-tag">기초 체력(1달평균): 분당 ${fmtNum(t.baseSpeedPerMin)}개</span>
+                        <span class="base-speed-tag">1달 데이터에 실시간 매도세(${Math.round(currentAskRatio*100)}%) 반영 중</span>
                     </div>
                 </div>
             </div>`;
@@ -239,18 +257,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 const isSeedMode = seedModeCoins.has(coin);
                 let newlyAccumulated = {}; // { targetPrice: volume }
                 
+                let recentBidVol = 0;
+                let recentAskVol = 0;
+                
                 json.data.forEach(tx => {
+                    const p = parseFloat(tx.price);
+                    const v = parseFloat(tx.units_traded);
+                    
+                    if (tx.type === 'bid') recentBidVol += v;
+                    else recentAskVol += v;
+
                     const txKey = `${coin}_${tx.transaction_date}_${tx.type}_${tx.price}_${tx.units_traded}`;
                     if (!seenTxKeys.has(txKey)) {
                         seenTxKeys.add(txKey);
                         
                         if (!isSeedMode) {
-                            const p = parseFloat(tx.price);
-                            const v = parseFloat(tx.units_traded);
                             newlyAccumulated[p] = (newlyAccumulated[p] || 0) + v;
                         }
                     }
                 });
+                
+                // Update Market Strength
+                const totalRecentVol = recentBidVol + recentAskVol;
+                if (totalRecentVol > 0) {
+                    let strengthPercent = 100;
+                    if (recentAskVol > 0) strengthPercent = (recentBidVol / recentAskVol) * 100;
+                    else strengthPercent = 999;
+                    marketStrengths[coin] = {
+                        strength: strengthPercent,
+                        askRatio: recentAskVol / totalRecentVol
+                    };
+                }
                 
                 // Clear seed mode after first successful fetch completes
                 if (isSeedMode) seedModeCoins.delete(coin);
@@ -265,14 +302,6 @@ document.addEventListener('DOMContentLoaded', () => {
                             t.remainingQty -= vol;
                             if (t.remainingQty < 0) t.remainingQty = 0;
                             needsUpdate = true;
-                            
-                            // Visual flash effect
-                            const card = document.getElementById(`card-${t.id}`);
-                            if(card) {
-                                card.classList.remove('flash-effect');
-                                void card.offsetWidth;
-                                card.classList.add('flash-effect');
-                            }
                         }
                     });
                 }

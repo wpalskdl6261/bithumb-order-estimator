@@ -173,9 +173,9 @@ input[type="number"]:focus {
 .info-metric strong { color: var(--text-main); font-size: 1.1rem; }
 
 .progress-wrap { margin: 15px 0 25px; }
-.progress-info { display: flex; justify-content: space-between; margin-bottom: 10px; align-items: flex-end;}
-.progress-info span { font-size: 0.95rem; color: var(--primary); font-weight:bold;}
-.highlight { font-size: 1.9rem; font-weight: 800; color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.3); }
+.progress-info { display: flex; flex-direction: column; margin-bottom: 10px; align-items: flex-start; gap: 5px;}
+.progress-info span { font-size: 0.95rem; color: var(--primary); font-weight:bold; word-break: keep-all; }
+.highlight { font-size: 1.9rem; font-weight: 800; color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.3); line-height: 1.2; word-break: break-all; }
 
 .progress-bar-bg { background: #0b0f19; height: 16px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .progress-bar-fill {
@@ -203,10 +203,5 @@ input[type="number"]:focus {
 .highlight-neon { font-size: 1.8rem; font-weight: 800; color: #fff; text-shadow: 0 0 15px rgba(34, 211, 238, 0.8); word-break: keep-all; line-height: 1.3; margin-bottom:5px;}
 .base-speed-tag { font-size: 0.85rem; color: var(--text-dim); background: #0b0f19; display:inline-block; padding: 4px 8px; border-radius: 6px;}
 
-.flash-effect { animation: flash 0.8s ease-out; }
-@keyframes flash {
-    0% { background-color: rgba(16, 185, 129, 0.3); }
-    100% { background-color: transparent }
-}
 
 footer { text-align: center; margin-top: 40px; color: var(--text-dim); font-size: 0.85rem; line-height: 1.5; opacity: 0.6; padding-bottom: 20px;}
