@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>바닐라 JS 순수 테스트 러너</title>
+    <style>
+        body { font-family: monospace; background: #1e1e1e; color: #fff; padding: 20px; font-size: 1.2rem; }
+        .pass { color: #2ecc71; margin: 10px 0; }
+        .fail { color: #e74c3c; margin: 10px 0; }
+        .title { color: #f1c40f; font-size: 1.5em; margin-bottom: 20px; font-weight: bold; }
+        .box { background: #2d2d2d; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 5px solid #2ecc71; }
+        .box.error { border-left-color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <div class="title">🧪 구축 완료: TDD 단위 로직 테스트 시뮬레이터</div>
+    <div id="log"></div>
+
+    <script type="module">
+        import { runTests } from './src/minigame/utils/evaluator.test.js';
+
+        const logEl = document.getElementById('log');
+
+        function logPass(msg) { logEl.innerHTML += `<div class="box pass">✅ PASS: ${msg}</div>`; }
+        function logFail(msg, error) { logEl.innerHTML += `<div class="box fail error">❌ FAIL: ${msg}<br>&nbsp;&nbsp;&nbsp;[Error] ${error}</div>`; }
+
+        // 간단한 Jest 호환 API 구현
+        const expect = (actual) => ({
+            toBe: (expected) => { if (actual !== expected) throw new Error(`Expected ${expected} but received ${actual}`); },
+            toBeGreaterThan: (expected) => { if (actual <= expected) throw new Error(`Expected > ${expected} but received ${actual}`); },
+            toBeLessThan: (expected) => { if (actual >= expected) throw new Error(`Expected < ${expected} but received ${actual}`); }
+        });
+
+        const test = (description, fn) => {
+            try {
+                fn();
+                logPass(description);
+            } catch (e) {
+                logFail(description, e.message);
+            }
+        };
+
+        // 테스트 자동 실행
+        runTests(test, expect);
+    </script>
+</body>
+</html>
