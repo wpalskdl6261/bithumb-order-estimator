@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>빗썸 실시간 대기 예상기</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo-box">
+                <span class="icon">⏱️</span>
+                <h1>빗썸 체결 예상기</h1>
+            </div>
+            <p class="subtitle">극초저가 코인(NFT, BTT) 전용 실시간 모니터링 대시보드</p>
+        </header>
+
+        <div class="dashboard">
+            <div class="panel config-panel">
+                <h2>1. 대상 설정</h2>
+                
+                <div class="form-group">
+                    <label>코인 선택</label>
+                    <div class="radio-group row">
+                        <label class="radio-btn"><input type="radio" name="coin" value="NFT" checked> <span>APENFT (NFT)</span></label>
+                        <label class="radio-btn"><input type="radio" name="coin" value="BTT"> <span>비트토렌트 (BTT)</span></label>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>현재 기준 주문 가격 (KRW)</label>
+                    <input type="number" id="targetPrice" value="0.002" step="0.001" min="0.001">
+                </div>
+
+                <div class="form-group">
+                    <label>내 앞의 대기 물량 기준</label>
+                    <div class="radio-group row">
+                        <label class="radio-btn"><input type="radio" name="input_type" value="KRW" checked> <span>원화(₩)</span></label>
+                        <label class="radio-btn"><input type="radio" name="input_type" value="COIN"> <span>코인개수</span></label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="amount-group">
+                    <label id="amount-label">앞에 쌓인 대기 원화 💵</label>
+                    <div class="input-with-postfix">
+                        <input type="number" id="targetAmount" placeholder="예: 10000000" min="0">
+                        <span id="amount-postfix">원</span>
+                    </div>
+                    <div class="sync-text" id="sync-text">= 대기 중...</div>
+                </div>
+
+                <button id="startBtn" class="btn-primary">실시간 추적 시작! 🚀</button>
+                <div class="sync-text" style="color:var(--text-dim); text-align:center; margin-top:10px;">(추적 시작 시 10초마다 빗썸과 동기화됩니다)</div>
+                <div id="error-msg" class="error-msg"></div>
+            </div>
+
+            <div class="panel status-panel" id="status-panel">
+                <div class="overlay" id="overlay">
+                    <span>좌측 설정을 완료하고 추적을 시작해 주세요</span>
+                </div>
+                <h2>2. 실시간 모니터링 레이더 📡</h2>
+
+                <div class="info-metric">
+                    <span>나의 물량 전까지 남은(시작점) 초기 코인 개수: </span>
+                    <strong id="initial-coin-qty">0</strong> <span>개</span>
+                </div>
+                
+                <div class="progress-wrap">
+                    <div class="progress-info">
+                        <span>현재 내 앞의 실시간 잔여 물량</span>
+                        <strong id="remaining-qty" class="highlight">0</strong>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" id="progress-fill" style="width: 100%"></div>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-title">내 앞 매물 깎인 양 (누적)</span>
+                        <strong class="stat-value" id="accumulated-volume">0</strong>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-title">추적 경과 시간</span>
+                        <strong class="stat-value" id="elapsed-time">0분 0초</strong>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-title">현재 체결 속도 (분당 평균)</span>
+                        <strong class="stat-value" id="speed-per-min">계산 중...</strong>
+                    </div>
+                </div>
+
+                <div class="prediction-box">
+                    <span class="pred-title">예상 체결 범위 (현재 타는 속도 기준)</span>
+                    <div class="pred-time highlight-neon" id="estimated-time">추정 대기 중... ⏳</div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            * 주의: 본 예상기는 코인 시장의 실시간 거래 속도를 기반으로 단순 계산한 지표입니다.<br>급등/급락 시에는 1분 만에도 막대한 물량이 소화될 수 있으므로 재미와 참고용으로만 활용하세요!
+        </footer>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
