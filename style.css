@@ -175,7 +175,7 @@ input[type="number"]:focus {
 .progress-wrap { margin: 15px 0 25px; }
 .progress-info { display: flex; flex-direction: column; margin-bottom: 10px; align-items: flex-start; gap: 5px;}
 .progress-info span { font-size: 0.95rem; color: var(--primary); font-weight:bold; word-break: keep-all; }
-.highlight { font-size: 1.9rem; font-weight: 800; color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.3); line-height: 1.2; word-break: break-all; }
+.highlight { font-size: 1.6rem; font-weight: 800; color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.3); line-height: 1.2; word-break: normal; overflow-wrap: anywhere; letter-spacing: -0.5px;}
 
 .progress-bar-bg { background: #0b0f19; height: 16px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
 .progress-bar-fill {
@@ -188,6 +188,7 @@ input[type="number"]:focus {
 
 /* Stats */
 .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+.stats-grid .prediction-box { grid-column: 1 / -1; padding-top: 25px; padding-bottom: 25px;}
 .stat-box { background: #0b0f19; padding: 12px; border-radius: 12px; border: 1px solid var(--border); text-align: center; }
 .stat-title { display: block; font-size: 0.8rem; color: var(--text-dim); margin-bottom: 6px; word-break: keep-all;}
 .stat-value { font-size: 1.1rem; font-weight: 800; color: #fff; }
