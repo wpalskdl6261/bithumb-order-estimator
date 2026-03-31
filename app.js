@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // UI Elements
+    // === UI Elements ===
     const targetPriceInput = document.getElementById('targetPrice');
     const targetAmountInput = document.getElementById('targetAmount');
     const syncText = document.getElementById('sync-text');
@@ -7,37 +7,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const amountPostfix = document.getElementById('amount-postfix');
     const radioInputTypes = document.querySelectorAll('input[name="input_type"]');
     const radioCoins = document.querySelectorAll('input[name="coin"]');
-    const startBtn = document.getElementById('startBtn');
-    const errorMsg = document.getElementById('error-msg');
+    const addTrackerBtn = document.getElementById('addTrackerBtn');
+    const activeCountEl = document.getElementById('active-count');
+    const trackerListEl = document.getElementById('tracker-list');
     
-    // Status Elements
-    const overlay = document.getElementById('overlay');
-    const initialQtyEl = document.getElementById('initial-coin-qty');
-    const remainingQtyEl = document.getElementById('remaining-qty');
-    const progressFill = document.getElementById('progress-fill');
-    const accumVolEl = document.getElementById('accumulated-volume');
-    const elapsedTimeEl = document.getElementById('elapsed-time');
-    const speedPerMinEl = document.getElementById('speed-per-min');
-    const estimatedTimeEl = document.getElementById('estimated-time');
-
-    // State Variables
-    let isTracking = false;
-    let initialQty = 0;
-    let remainingQty = 0;
-    let accumulatedVol = 0;
-    let startTime = 0;
-    let trackingInterval;
-    let targetPrice = 0;
+    // === State Management ===
+    let trackers = JSON.parse(localStorage.getItem('bithumb_trackers_v2') || '[]');
     let selectedCoin = 'NFT';
+    let currentInitialQty = 0;
     
-    // Seen trades to prevent double counting
-    // Store as Set of strings: "date_type_price_units"
-    let seenTrades = new Set();
+    // Multi-polling seed states
+    let seenTxKeys = new Set();
+    let seedModeCoins = new Set(); // Coins that need initial fetch without tracking
+    
+    const fmtNum = num => Math.floor(Math.max(0, num)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    
+    const formatDate = (ms) => {
+        const d = new Date(ms);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    };
 
-    // Utility: Format numbers with commas
-    const fmtNum = num => Math.floor(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const saveTrackers = () => localStorage.setItem('bithumb_trackers_v2', JSON.stringify(trackers));
 
-    // Input Type Toggle Logic
+    // === Sync UI Logic ===
     const updateInputLabels = () => {
         const type = document.querySelector('input[name="input_type"]:checked').value;
         if (type === 'KRW') {
@@ -52,27 +44,24 @@ document.addEventListener('DOMContentLoaded', () => {
         calculateSync();
     };
 
-    // Calculate Live Sync
     const calculateSync = () => {
-        if (isTracking) return;
-        
         const type = document.querySelector('input[name="input_type"]:checked').value;
         const price = parseFloat(targetPriceInput.value);
         const amount = parseFloat(targetAmountInput.value);
         
         if (isNaN(price) || isNaN(amount) || price <= 0 || amount <= 0) {
-            syncText.innerText = '= 변환 대기 중...';
-            initialQty = 0;
+            syncText.innerText = '= 대기 중...';
+            currentInitialQty = 0;
             return;
         }
 
         if (type === 'KRW') {
             const coinQty = amount / price;
-            initialQty = coinQty;
+            currentInitialQty = coinQty;
             syncText.innerText = `= 내 앞 대기 코인 약 ${fmtNum(coinQty)} 개`;
         } else {
             const krwValue = amount * price;
-            initialQty = amount;
+            currentInitialQty = amount;
             syncText.innerText = `= 내 앞 대기 원화 약 ${fmtNum(krwValue)} 원`;
         }
     };
@@ -80,157 +69,233 @@ document.addEventListener('DOMContentLoaded', () => {
     radioInputTypes.forEach(r => r.addEventListener('change', updateInputLabels));
     targetPriceInput.addEventListener('input', calculateSync);
     targetAmountInput.addEventListener('input', calculateSync);
-    
     radioCoins.forEach(r => r.addEventListener('change', (e) => {
         selectedCoin = e.target.value;
-        // Adjust default precision suggestion
-        targetPriceInput.value = selectedCoin === 'NFT' ? '0.001' : '0.002';
+        targetPriceInput.value = selectedCoin === 'NFT' ? '0.0001' : '0.0004';
         calculateSync();
     }));
 
-    // Start Tracking
-    startBtn.addEventListener('click', () => {
-        if (initialQty <= 0) {
-            errorMsg.innerText = "올바른 가격과 수량을 입력해주세요!";
-            return;
-        }
+    // === Add New Tracker (Fetch Base Speed via Candlestick) ===
+    addTrackerBtn.addEventListener('click', async () => {
+        if (currentInitialQty <= 0) return alert("올바른 가격과 수량을 입력해주세요!");
         
-        errorMsg.innerText = "";
-        isTracking = true;
-        targetPrice = parseFloat(targetPriceInput.value);
-        selectedCoin = document.querySelector('input[name="coin"]:checked').value;
+        const price = parseFloat(targetPriceInput.value);
+        const qty = currentInitialQty;
+        const coin = selectedCoin;
         
-        // Disable inputs
-        targetPriceInput.disabled = true;
-        targetAmountInput.disabled = true;
-        radioInputTypes.forEach(r => r.disabled = true);
-        radioCoins.forEach(r => r.disabled = true);
-        startBtn.innerText = "🚨 추적 중 (새로고침 시 초기화)";
-        startBtn.disabled = true;
+        addTrackerBtn.disabled = true;
+        addTrackerBtn.innerText = "1달 빅데이터 분석 중... ⏳";
         
-        // Initialize State
-        remainingQty = initialQty;
-        accumulatedVol = 0;
-        startTime = Date.now();
-        seenTrades.clear();
+        let baseSpeed = 10000; // default fallback
+        try {
+            // Fetch 24h Candlestick data for last 30 days
+            const res = await fetch(`https://api.bithumb.com/public/candlestick/${coin}_KRW/24h`);
+            const json = await res.json();
+            if (json.status === "0000" && json.data) {
+                // Get last 30 days
+                const last30 = json.data.slice(-30);
+                let totalVolume = 0;
+                last30.forEach(candle => { totalVolume += parseFloat(candle[5]); }); // candle[5] is volume
+                
+                const minsIn30Days = last30.length * 24 * 60;
+                baseSpeed = totalVolume / minsIn30Days;
+            }
+        } catch(e) { console.error("Candle fetch failed", e); }
+
+        const newTracker = {
+            id: Date.now(),
+            coin: coin,
+            targetPrice: price,
+            initialQty: qty,
+            remainingQty: qty,
+            accumulatedVol: 0,
+            startTime: Date.now(),
+            baseSpeedPerMin: baseSpeed,
+            status: 'active'
+        };
+
+        trackers.push(newTracker);
+        saveTrackers();
+        seedModeCoins.add(coin); // Must seed to prevent duplicate immediately
         
-        // Update UI
-        overlay.style.display = 'none';
-        initialCoinQtyUpdate();
-        updateDashboard();
+        targetAmountInput.value = '';
+        calculateSync();
         
-        // Fetch initially to seed 'seenTrades' but don't count them
-        fetchTransactions(true);
+        addTrackerBtn.innerText = "이 조건으로 추적 덱에 추가! ➕";
+        addTrackerBtn.disabled = false;
         
-        // Polling every 5 seconds
-        trackingInterval = setInterval(() => {
-            fetchTransactions(false);
-            updateTimerOnly();
-        }, 5000);
+        renderCards();
     });
 
-    const initialCoinQtyUpdate = () => {
-        initialQtyEl.innerText = fmtNum(initialQty);
-        remainingQtyEl.innerText = fmtNum(remainingQty);
-        progressFill.style.width = '100%';
+    // === Render DOM ===
+    const removeTracker = (id) => {
+        trackers = trackers.filter(t => t.id !== id);
+        saveTrackers();
+        renderCards();
     };
 
-    const updateTimerOnly = () => {
-        const elapsedMs = Date.now() - startTime;
-        const totalSec = Math.floor(elapsedMs / 1000);
-        const m = Math.floor(totalSec / 60);
-        const s = totalSec % 60;
-        elapsedTimeEl.innerText = `${m}분 ${s}초`;
+    window.removeTracker = removeTracker; // exp to global
+
+    const renderCards = () => {
+        trackerListEl.innerHTML = '';
+        activeCountEl.innerText = trackers.length;
         
-        // Update Predictions if we have at least 15 seconds of data and some volume
-        if (totalSec > 15 && accumulatedVol > 0) {
-            const elapsedMins = elapsedMs / 60000;
-            const volPerMin = accumulatedVol / elapsedMins;
-            speedPerMinEl.innerText = `${fmtNum(volPerMin)} 개/분`;
+        if(trackers.length === 0) {
+            trackerListEl.innerHTML = `<div style="text-align:center; padding:30px; color:var(--text-dim);">진행 중인 추적이 없습니다. 위에서 추가해보세요!</div>`;
+            return;
+        }
+
+        const now = Date.now();
+        
+        trackers.forEach(t => {
+            // Calculate Hybrid Speed
+            const elapsedMins = (now - t.startTime) / 60000;
+            let liveSpeed = 0;
+            let compositeSpeed = t.baseSpeedPerMin;
             
-            if (volPerMin > 0) {
-                const estMinsRemaining = remainingQty / volPerMin;
-                
-                const d = Math.floor(estMinsRemaining / (24 * 60));
-                const h = Math.floor((estMinsRemaining % (24 * 60)) / 60);
-                const mins = Math.floor(estMinsRemaining % 60);
-                
-                let timeStr = "";
-                if (d > 0) timeStr += `${d}일 `;
-                if (h > 0 || d > 0) timeStr += `${h}시간 `;
-                timeStr += `${mins}분`;
-                
-                estimatedTimeEl.innerText = timeStr;
+            if (elapsedMins > 0.5) {
+                liveSpeed = t.accumulatedVol / elapsedMins;
+                // Add some live weight dynamically
+                // If live speed is non-zero, let's mix it 50/50. If 0, mostly rely on base.
+                const liveWeight = elapsedMins > 60 ? 0.7 : 0.4; // More weight if tracked longer
+                compositeSpeed = (t.baseSpeedPerMin * (1 - liveWeight)) + (liveSpeed * liveWeight);
             }
-        } else if (totalSec > 15 && accumulatedVol === 0) {
-            speedPerMinEl.innerText = `0 개/분`;
-            estimatedTimeEl.innerText = `거래가 없어서 계산 불가 😢`;
-        }
+            if (compositeSpeed <= 0) compositeSpeed = 1;
+            
+            const estMins = t.remainingQty / compositeSpeed;
+            const d = Math.floor(estMins / (24 * 60));
+            const h = Math.floor((estMins % (24 * 60)) / 60);
+            const m = Math.floor(estMins % 60);
+            
+            let timeStr = "";
+            if (t.remainingQty <= 0) timeStr = "🎉 체결 완료됨!!";
+            else if (d > 0) timeStr = `약 ${d}일 ${h}시간 ${m}분`;
+            else timeStr = `약 ${h}시간 ${m}분`;
+
+            let percent = ((t.initialQty - t.remainingQty) / t.initialQty) * 100;
+            if (percent > 100) percent = 100;
+            if (percent < 0) percent = 0;
+
+            const cardHtml = `
+            <div class="tracker-card" id="card-${t.id}">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">
+                            ${t.coin === 'NFT' ? '🦋' : '⚓'} ${t.coin} 
+                            <span class="target-price">${t.targetPrice} ₩ 타점</span>
+                        </div>
+                        <div class="date-badge">추적 시작: ${formatDate(t.startTime)}</div>
+                    </div>
+                    <button class="btn-delete" onclick="removeTracker(${t.id})">삭제 🗑️</button>
+                </div>
+
+                <div class="info-metric">
+                    <span>나의 물량 전까지 초기 세팅 코인 수량</span>
+                    <strong>${fmtNum(t.initialQty)} 개</strong>
+                </div>
+
+                <div class="progress-wrap">
+                    <div class="progress-info">
+                        <span>현재 내 앞의 실시간 잔여 물량 🔥</span>
+                        <strong class="highlight">${fmtNum(t.remainingQty)}</strong>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" style="width: ${percent}%"></div>
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <span class="stat-title">추가 이후 내 앞 매물 깎인 양 (누적)</span>
+                        <strong class="stat-value">${fmtNum(t.accumulatedVol)}</strong>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-title">라이브 체결 속도 (분당)</span>
+                        <strong class="stat-value">${fmtNum(liveSpeed)}</strong>
+                    </div>
+                    <div class="prediction-box stat-box">
+                        <span class="pred-title">예상 체결 대기 시간 (하이브리드 엔진)</span>
+                        <div class="highlight-neon">${timeStr}</div>
+                        <span class="base-speed-tag">기초 체력(1달평균): 분당 ${fmtNum(t.baseSpeedPerMin)}개</span>
+                    </div>
+                </div>
+            </div>`;
+            trackerListEl.insertAdjacentHTML('beforeend', cardHtml);
+        });
     };
 
-    const updateDashboard = () => {
-        remainingQtyEl.innerText = fmtNum(remainingQty);
-        accumVolEl.innerText = fmtNum(accumulatedVol);
+    // === Multi-Polling Engine ===
+    const pollTransactions = async () => {
+        if (trackers.length === 0) return;
         
-        let percent = (remainingQty / initialQty) * 100;
-        if (percent < 0) percent = 0;
-        progressFill.style.width = `${percent}%`;
+        const uniqueCoins = [...new Set(trackers.map(t => t.coin))];
         
-        // Flash animation
-        const statBox = accumVolEl.parentElement;
-        statBox.classList.remove('flash-effect');
-        void statBox.offsetWidth; // trigger reflow
-        statBox.classList.add('flash-effect');
-        
-        if (remainingQty <= 0) {
-            clearInterval(trackingInterval);
-            estimatedTimeEl.innerText = "🎉 체결 완료 예상!!";
-            progressFill.style.width = '0%';
-            remainingQtyEl.innerText = '0 (체결 타겟 도달)';
-        }
-    };
-
-    const fetchTransactions = async (isInitialSeed) => {
-        try {
-            const res = await fetch(`https://api.bithumb.com/public/transaction_history/${selectedCoin}_KRW?count=100`);
-            const json = await res.json();
-            
-            if (json.status !== "0000" || !json.data) return;
-            
-            let matchedInThisFetch = 0;
-            
-            json.data.forEach(tx => {
-                const txKey = `${tx.transaction_date}_${tx.type}_${tx.price}_${tx.units_traded}`;
+        for (const coin of uniqueCoins) {
+            try {
+                const res = await fetch(`https://api.bithumb.com/public/transaction_history/${coin}_KRW?count=100`);
+                const json = await res.json();
+                if (json.status !== "0000" || !json.data) continue;
                 
-                if (!seenTrades.has(txKey)) {
-                    seenTrades.add(txKey);
-                    
-                    if (!isInitialSeed) {
-                        const txPrice = parseFloat(tx.price);
-                        // If transaction price equals our target price, the wall is being eaten
-                        if (txPrice === targetPrice) {
-                            matchedInThisFetch += parseFloat(tx.units_traded);
+                const isSeedMode = seedModeCoins.has(coin);
+                let newlyAccumulated = {}; // { targetPrice: volume }
+                
+                json.data.forEach(tx => {
+                    const txKey = `${coin}_${tx.transaction_date}_${tx.type}_${tx.price}_${tx.units_traded}`;
+                    if (!seenTxKeys.has(txKey)) {
+                        seenTxKeys.add(txKey);
+                        
+                        if (!isSeedMode) {
+                            const p = parseFloat(tx.price);
+                            const v = parseFloat(tx.units_traded);
+                            newlyAccumulated[p] = (newlyAccumulated[p] || 0) + v;
                         }
                     }
-                }
-            });
-            
-            // Keep memory bounded
-            if (seenTrades.size > 1000) {
-                const arr = Array.from(seenTrades).slice(-500);
-                seenTrades = new Set(arr);
-            }
-            
-            if (matchedInThisFetch > 0) {
-                accumulatedVol += matchedInThisFetch;
-                remainingQty -= matchedInThisFetch;
-                if (remainingQty < 0) remainingQty = 0;
+                });
                 
-                updateDashboard();
-            }
-            
-        } catch (e) {
-            console.error("Bithumb API Fetch Error:", e);
+                // Clear seed mode after first successful fetch completes
+                if (isSeedMode) seedModeCoins.delete(coin);
+                
+                // Apply volumes to trackers
+                let needsUpdate = false;
+                for (let price in newlyAccumulated) {
+                    const vol = newlyAccumulated[price];
+                    trackers.forEach(t => {
+                        if (t.coin === coin && parseFloat(t.targetPrice) === parseFloat(price) && t.remainingQty > 0) {
+                            t.accumulatedVol += vol;
+                            t.remainingQty -= vol;
+                            if (t.remainingQty < 0) t.remainingQty = 0;
+                            needsUpdate = true;
+                            
+                            // Visual flash effect
+                            const card = document.getElementById(`card-${t.id}`);
+                            if(card) {
+                                card.classList.remove('flash-effect');
+                                void card.offsetWidth;
+                                card.classList.add('flash-effect');
+                            }
+                        }
+                    });
+                }
+                
+                if (needsUpdate) saveTrackers();
+                
+            } catch(e) { console.error(`Poll error for ${coin}:`, e); }
         }
+        
+        // Prevent memory overflow for Set
+        if (seenTxKeys.size > 2000) {
+            seenTxKeys = new Set(Array.from(seenTxKeys).slice(-1000));
+        }
+        
+        renderCards();
     };
+
+    // Initialization
+    // Mark existing coins for Seed Mode on boot to avoid counting past 100 history items as "recent" magically
+    if (trackers.length > 0) {
+        trackers.forEach(t => seedModeCoins.add(t.coin));
+    }
+    
+    renderCards();
+    setInterval(pollTransactions, 5000); // 5 seconds polling
 });
