@@ -1,3 +1,4 @@
+web application/stitch/projects/69035750349778436/screens/14733262107979790218
 document.addEventListener('DOMContentLoaded', () => {
     // === UI Elements ===
     const targetPriceInput = document.getElementById('targetPrice');
@@ -333,3 +334,4 @@ document.addEventListener('DOMContentLoaded', () => {
     renderCards();
     setInterval(pollTransactions, 5000); // 5 seconds polling
 });
+
