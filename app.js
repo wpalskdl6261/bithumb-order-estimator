@@ -259,6 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 let recentBidVol = 0;
                 let recentAskVol = 0;
+                let currentPayloadCounts = {}; // 중복 거래 키 방지용 카운터
                 
                 json.data.forEach(tx => {
                     const p = parseFloat(tx.price);
@@ -267,7 +268,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (tx.type === 'bid') recentBidVol += v;
                     else recentAskVol += v;
 
-                    const txKey = `${coin}_${tx.transaction_date}_${tx.type}_${tx.price}_${tx.units_traded}`;
+                    const baseTxKey = `${coin}_${tx.transaction_date}_${tx.type}_${tx.price}_${tx.units_traded}`;
+                    currentPayloadCounts[baseTxKey] = (currentPayloadCounts[baseTxKey] || 0) + 1;
+                    const txKey = `${baseTxKey}_${currentPayloadCounts[baseTxKey]}`;
+
                     if (!seenTxKeys.has(txKey)) {
                         seenTxKeys.add(txKey);
                         
@@ -297,7 +301,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 for (let price in newlyAccumulated) {
                     const vol = newlyAccumulated[price];
                     trackers.forEach(t => {
-                        if (t.coin === coin && parseFloat(t.targetPrice) === parseFloat(price) && t.remainingQty > 0) {
+                        // 미세소수점 단위를 위해 오차범위 0.0000001 로 비교 (float string equals 문제 해결)
+                        if (t.coin === coin && Math.abs(parseFloat(t.targetPrice) - parseFloat(price)) < 0.0000001 && t.remainingQty > 0) {
                             t.accumulatedVol += vol;
                             t.remainingQty -= vol;
                             if (t.remainingQty < 0) t.remainingQty = 0;
