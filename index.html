@@ -1,76 +1,163 @@
-web application/stitch/projects/69035750349778436/screens/14733262107979788982
+<!-- index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>빗썸 다중 대기 예상기 (V2)</title>
+    <title>Bithumb Estimator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap" rel="stylesheet">
 </head>
-<body>
-    <div class="container">
-        <header>
-            <div class="logo-box">
-                <span class="icon">🚀</span>
-                <h1>빗썸 체결 대시보드 V2</h1>
+<body class="p-4 pt-20">
+
+    <!-- Top Bar -->
+    <header class="fixed top-0 left-0 w-full bg-[#0f141a]/60 backdrop-blur-xl z-50 px-6 py-4 flex justify-between items-center shadow-lg">
+        <div class="flex items-center gap-2">
+            <span class="material-icons text-[#f37321]">monitoring</span>
+            <span class="text-lg font-black text-[#f37321] tracking-tight">Bithumb Estimator</span>
+        </div>
+        <span class="text-slate-400 text-xs font-bold">v1.0.4</span>
+    </header>
+
+    <div class="max-w-md mx-auto">
+        
+        <!-- Header Section -->
+        <div class="text-center mb-8">
+            <div class="inline-flex items-center justify-center p-3 bg-[#f37321]/10 rounded-2xl mb-4">
+                <span class="text-4xl">🚀</span>
             </div>
-            <p class="subtitle">다중 추적 지원 및 1달 단위 과거 빅데이터 하이브리드 자동 계산</p>
-        </header>
+            <h1 class="text-3xl font-extrabold text-white tracking-tight mb-2">체결대시보드 V2</h1>
+            <p class="text-slate-400 text-sm leading-relaxed px-4">하이브리드 엔진 기반 30일 빅데이터 정밀 추정</p>
+        </div>
 
-        <div class="add-panel panel">
-            <h2>➕ 신규 체결 추적 추가</h2>
-            
-            <div class="form-grid">
-                <div class="form-group">
-                    <label>대상 코인</label>
-                    <div class="radio-group row">
-                        <label class="radio-btn"><input type="radio" name="coin" value="NFT" checked> <span>APENFT (NFT)</span></label>
-                        <label class="radio-btn"><input type="radio" name="coin" value="BTT"> <span>비트토렌트 (BTT)</span></label>
+        <!-- Add Tracker Form -->
+        <div class="glass-panel rounded-3xl p-6 mb-8 orange-glow">
+            <h2 class="flex items-center gap-2 text-white font-bold text-lg mb-6">
+                <span class="material-icons text-[#f37321]">add_circle</span>
+                신규 체결 추적 추가
+            </h2>
+
+            <div class="space-y-6">
+                <!-- Coin Selection -->
+                <div>
+                    <label class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">대상 코인 선택</label>
+                    <div class="grid grid-cols-2 gap-3">
+                        <label class="radio-btn relative cursor-pointer">
+                            <input type="radio" name="coin" value="NFT" checked class="absolute opacity-0">
+                            <span class="flex items-center justify-center p-3 rounded-xl font-bold text-sm transition-all">APENFT (NFT)</span>
+                        </label>
+                        <label class="radio-btn relative cursor-pointer">
+                            <input type="radio" name="coin" value="BTT" class="absolute opacity-0">
+                            <span class="flex items-center justify-center p-3 rounded-xl font-bold text-sm transition-all text-slate-500">비트토렌트 (BTT)</span>
+                        </label>
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label>현재 기준 주문 가격 (KRW)</label>
-                    <input type="number" id="targetPrice" value="0.0004" step="0.0001" min="0.0001">
-                </div>
-
-                <div class="form-group">
-                    <label>대기 물량 입력 기준</label>
-                    <div class="radio-group row">
-                        <label class="radio-btn"><input type="radio" name="input_type" value="KRW" checked> <span>원화(₩)</span></label>
-                        <label class="radio-btn"><input type="radio" name="input_type" value="COIN"> <span>코인개수</span></label>
+                <!-- Target Price -->
+                <div>
+                    <label class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">현재 기준 주문 가격 (KRW)</label>
+                    <div class="relative">
+                        <input type="number" id="targetPrice" value="0.0001" step="0.0001" class="w-full p-4 rounded-xl font-mono text-xl text-[#f37321] font-bold">
+                        <span class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">₩</span>
                     </div>
                 </div>
 
-                <div class="form-group" id="amount-group">
-                    <label id="amount-label">내 앞 대기 원화 💵</label>
-                    <div class="input-with-postfix">
-                        <input type="number" id="targetAmount" placeholder="예: 10000000" min="0">
-                        <span id="amount-postfix">원</span>
+                <!-- Input Type -->
+                <div>
+                    <label class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">대기 물량 입력 기준</label>
+                    <div class="grid grid-cols-2 gap-3">
+                        <label class="radio-btn relative cursor-pointer">
+                            <input type="radio" name="input_type" value="KRW" checked class="absolute opacity-0">
+                            <span class="flex items-center justify-center p-3 rounded-xl font-bold text-sm transition-all">원화(₩)</span>
+                        </label>
+                        <label class="radio-btn relative cursor-pointer">
+                            <input type="radio" name="input_type" value="COIN" class="absolute opacity-0">
+                            <span class="flex items-center justify-center p-3 rounded-xl font-bold text-sm transition-all text-slate-500">코인개수</span>
+                        </label>
                     </div>
-                    <div class="sync-text" id="sync-text">= 대기 중...</div>
                 </div>
-            </div>
 
-            <button id="addTrackerBtn" class="btn-primary">이 조건으로 추적 덱에 추가! ➕</button>
-            <div id="error-msg" class="error-msg"></div>
-            <div class="sync-text" style="color:var(--text-dim); text-align:center; margin-top:10px;">
-                💡 1달치 평균 캔들을 자동 분석하여 목표 시점을 미리 알려드립니다.
+                <!-- Amount -->
+                <div>
+                    <label id="amount-label" class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">내 앞 대기 원화 💵</label>
+                    <div class="relative">
+                        <input type="number" id="targetAmount" placeholder="예: 10,000,000" class="w-full p-4 rounded-xl font-mono text-lg">
+                        <span id="amount-postfix" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">원</span>
+                    </div>
+                    <p id="sync-text" class="text-[#f37321] text-sm font-bold mt-2">= 대기 중...</p>
+                </div>
+
+                <button id="addTrackerBtn" class="btn-primary w-full py-5 rounded-2xl text-white font-black text-lg flex items-center justify-center gap-2 shadow-xl">
+                    <span class="material-icons">rocket_launch</span>
+                    추적 덱에 추가하기
+                </button>
+
+                <p class="text-center text-[10px] text-slate-500 font-medium">
+                    <span class="material-icons text-[12px] align-middle">info</span>
+                    1달치 평균 캔들을 자동 분석하여 목표 시점을 미리 알려드립니다.
+                </p>
             </div>
         </div>
 
-        <h2 class="section-title">📡 라이브 체결 추적 현황 (<span id="active-count">0</span>)</h2>
-        <div id="tracker-list" class="tracker-list">
-            <!-- Cards will be populated here -->
+        <!-- Live Tracker List Header -->
+        <div class="flex items-center justify-between mb-6 px-2">
+            <h3 class="flex items-center gap-2 text-white font-bold text-lg">
+                <span class="material-icons text-[#f37321]">sensors</span>
+                라이브 체결 추적 현황
+            </h3>
+            <span class="bg-[#181c23] border border-white/5 text-slate-400 text-[10px] font-black px-3 py-1.5 rounded-full flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-[#f37321] animate-pulse"></span>
+                0 ACTIVE BATCHES
+            </span>
         </div>
 
-        <footer>
-            * 주의: 본 예상기는 1달치 평균 거래량(Base)과 실시간 속도를 혼합한 하이브리드 추정치입니다.<br>
-            단순 계산 지표이므로 실제 체결과는 차이가 날 수 있습니다! 브라우저를 켜두시면 5초마다 실시간 반영됩니다 (꺼도 기록은 남아 부활합니다!)
+        <!-- Empty State -->
+        <div id="tracker-list" class="space-y-4">
+            <div class="border-2 border-dashed border-white/5 rounded-3xl p-12 text-center">
+                <div class="w-16 h-16 bg-[#181c23] rounded-2xl flex items-center justify-center mx-auto mb-6">
+                    <span class="material-icons text-slate-600 text-3xl">hourglass_empty</span>
+                </div>
+                <h4 class="text-white font-bold text-xl mb-2">진행 중인 추적이 없습니다</h4>
+                <p class="text-slate-500 text-sm leading-relaxed px-4">시작하려면 상단 양식에서 코인과 물량을 입력하여 추적을 시작하세요.</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-12 text-center px-4 space-y-6">
+            <p class="text-[10px] text-slate-500 leading-relaxed font-medium">
+                * 주의: 본 예상기는 1달치 평균 거래량(Base)과 실시간 속도를 혼합한 하이브리드 추정치입니다. 단순 계산 지표이므로 실제 체결과는 차이가 날 수 있습니다. 브라우저를 켜두시면 5초마다 실시간 반영됩니다.
+            </p>
+            <div class="flex justify-center gap-6 text-[10px] font-black text-[#f37321] uppercase tracking-widest">
+                <a href="#">Documentation</a>
+                <a href="#">Terms</a>
+                <a href="#">Support</a>
+            </div>
         </footer>
+
     </div>
-    
+
+    <!-- Bottom Nav Bar -->
+    <nav class="fixed bottom-0 left-0 w-full bg-[#0f141a]/80 backdrop-blur-lg border-t border-[#f37321]/10 px-4 pb-6 pt-3 flex justify-around items-center z-50">
+        <button class="flex flex-col items-center justify-center text-slate-500 group">
+            <span class="material-icons text-2xl group-hover:text-[#f37321] transition-colors">show_chart</span>
+            <span class="text-[10px] font-semibold tracking-wider uppercase mt-1">Markets</span>
+        </button>
+        <button class="flex flex-col items-center justify-center text-[#f37321] bg-[#f37321]/10 rounded-xl px-3 py-1.5">
+            <span class="material-icons text-2xl">calculate</span>
+            <span class="text-[10px] font-semibold tracking-wider uppercase mt-1">Estimator</span>
+        </button>
+        <button class="flex flex-col items-center justify-center text-slate-500 group">
+            <span class="material-icons text-2xl group-hover:text-[#f37321] transition-colors">hourglass_empty</span>
+            <span class="text-[10px] font-semibold tracking-wider uppercase mt-1">Active</span>
+        </button>
+        <button class="flex flex-col items-center justify-center text-slate-500 group">
+            <span class="material-icons text-2xl group-hover:text-[#f37321] transition-colors">settings</span>
+            <span class="text-[10px] font-semibold tracking-wider uppercase mt-1">Settings</span>
+        </button>
+    </nav>
+
     <script src="app.js"></script>
 </body>
 </html>
