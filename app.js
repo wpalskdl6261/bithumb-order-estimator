@@ -1,12 +1,12 @@
 document.addEventListener('DOMContentLoaded', () => {
     const STORAGE_KEY = 'bithumb_trackers_v2';
     const ANALYSIS_VERSION = 2;
-    const HISTORICAL_DAYS = 30;
-    const LIVE_WINDOW_MS = 30 * 60 * 1000;
-    const STRENGTH_WINDOW_MS = 15 * 60 * 1000;
+    const LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
+    const TREND_WINDOW_MINUTES = 120;
+    const MIN_TRACKING_MINUTES = 5;
     const POLL_INTERVAL_MS = 3000;
     const MAX_PROCESSED_KEYS = 240;
-    const MAX_RECENT_TRADES_PER_COIN = 1400;
+    const MAX_RECENT_TRADES_PER_COIN = 4000;
     const PRICE_MATCH_TOLERANCE = 0.00005;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
     const STORAGE_DB_NAME = 'bithumb-estimator-db';
@@ -27,11 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const errorMsgEl = document.getElementById('error-msg');
 
     const bootState = readLocalState();
-    const candleCache = new Map();
     let trackers = normalizeTrackers(bootState.trackers);
     let currentInitialQty = 0;
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
-    let marketStrengths = {};
     let recentTradesByCoin = {};
     let recentTradeKeys = new Set();
     let lastSavedAt = Number(bootState.savedAt) || 0;
@@ -44,8 +42,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (safe >= 1) return safe.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
         return safe.toLocaleString('ko-KR', { maximumFractionDigits: 6 });
     };
-    const fmtRate = (num) => `${fmtNum(num)}개/분`;
-    const fmtKrw = (num) => `${Math.max(0, Math.round(num || 0)).toLocaleString('ko-KR')}원`;
     const fmtKrwRate = (speedPerMin, price) => `${Math.max(0, Math.round((Number(speedPerMin) || 0) * (Number(price) || 0) * 60)).toLocaleString('ko-KR')}원/시간`;
     const formatFullDate = (ms) => {
         const d = new Date(ms);
@@ -77,20 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const pStr = p.toFixed(4);
         return tStr === pStr;
     };
-    const baseAnalysis = (tracker = {}) => {
-        const legacy = Number(tracker.baseTotalSpeedPerMin || tracker.baseSpeedPerMin || 0);
-        return {
-            version: ANALYSIS_VERSION,
-            daysAnalyzed: HISTORICAL_DAYS,
-            matchedDays: 0,
-            coverageRatio: 0,
-            weightedVolume: 0,
-            speedPerMin: legacy > 0 ? legacy : 0,
-            avgMatchedVolumePerDay: legacy > 0 ? legacy * 1440 : 0,
-            analyzedAt: Date.now(),
-            source: legacy > 0 ? 'legacy' : 'pending'
-        };
-    };
+    const baseAnalysis = () => ({ version: ANALYSIS_VERSION, source: 'tracking_only' });
     function readLocalState() {
         try {
             const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -131,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         processedTradeKeys: Array.isArray(t.processedTradeKeys) ? t.processedTradeKeys.slice(-MAX_PROCESSED_KEYS) : [],
                         lastSeenTradeAt: Number(t.lastSeenTradeAt) || startTime,
                         lastMatchedAt: Number(t.lastMatchedAt) || 0,
-                        historicalAnalysis: t.historicalAnalysis && t.historicalAnalysis.version === ANALYSIS_VERSION ? t.historicalAnalysis : baseAnalysis(t)
+                        historicalAnalysis: baseAnalysis()
                     };
                 })
                 .filter(Boolean);
@@ -267,66 +250,6 @@ document.addEventListener('DOMContentLoaded', () => {
         syncText.innerText = `= 내 앞 대기 원화 약 ${fmtNum(amount * price)} 원`;
     };
 
-    const fetchCandles = async (coin) => {
-        if (candleCache.has(coin)) return candleCache.get(coin);
-        const req = fetch(`https://api.bithumb.com/public/candlestick/${coin}_KRW/24h`)
-            .then((r) => r.json())
-            .then((json) => {
-                if (json.status !== '0000' || !Array.isArray(json.data)) throw new Error(`candle:${coin}`);
-                return json.data.slice(-HISTORICAL_DAYS);
-            })
-            .catch((error) => {
-                candleCache.delete(coin);
-                throw error;
-            });
-        candleCache.set(coin, req);
-        return req;
-    };
-    const buildAnalysis = (candles, targetPrice) => {
-        const days = Array.isArray(candles) ? candles.slice(-HISTORICAL_DAYS) : [];
-        const totalMinutes = Math.max(1, days.length * 1440);
-        const bandWidth = Math.max(0.0001, Number(targetPrice) * 0.03);
-        const lowBand = Math.max(0, Number(targetPrice) - (bandWidth / 2));
-        const highBand = Number(targetPrice) + (bandWidth / 2);
-        let matchedDays = 0;
-        let weightedVolume = 0;
-        let totalVolume = 0;
-        days.forEach((candle) => {
-            const open = Number(candle[1]);
-            const close = Number(candle[2]);
-            const high = Number(candle[3]);
-            const low = Number(candle[4]);
-            const volume = Number(candle[5]);
-            if (![open, close, high, low, volume].every(Number.isFinite)) return;
-            totalVolume += volume;
-            if (high < lowBand || low > highBand) return;
-            matchedDays += 1;
-            const range = Math.max(high - low, bandWidth);
-            const overlap = Math.max(0, Math.min(high, highBand) - Math.max(low, lowBand));
-            const weight = clamp(((clamp(overlap / bandWidth, 0.2, 1) * 0.45) + ((1 - Math.min(1, Math.abs(close - targetPrice) / range)) * 0.35) + ((1 - Math.min(1, Math.abs(open - targetPrice) / range)) * 0.2)), 0.18, 1);
-            weightedVolume += volume * weight;
-        });
-        const speedPerMin = weightedVolume > 0 ? weightedVolume / totalMinutes : ((totalVolume / totalMinutes) || 0) * 0.02;
-        return { version: ANALYSIS_VERSION, daysAnalyzed: days.length || HISTORICAL_DAYS, matchedDays, coverageRatio: days.length ? matchedDays / days.length : 0, weightedVolume, speedPerMin, avgMatchedVolumePerDay: matchedDays ? weightedVolume / matchedDays : 0, analyzedAt: Date.now(), source: matchedDays ? 'monthly_range' : 'monthly_fallback' };
-    };
-    const analyzeTracker = async (tracker) => {
-        try {
-            return buildAnalysis(await fetchCandles(tracker.coin), tracker.targetPrice);
-        } catch (error) {
-            console.error('analysis failed', error);
-            return baseAnalysis(tracker);
-        }
-    };
-    const refreshAnalyses = async () => {
-        for (const tracker of trackers.filter((t) => !t.historicalAnalysis || t.historicalAnalysis.version !== ANALYSIS_VERSION || ['legacy', 'pending'].includes(t.historicalAnalysis.source))) {
-            const next = await analyzeTracker(tracker);
-            const current = trackers.find((item) => item.id === tracker.id);
-            if (!current) continue;
-            current.historicalAnalysis = next;
-            saveTrackers();
-            renderCards();
-        }
-    };
     const buildTrades = (coin, rawTrades) => {
         const counts = {};
         return rawTrades.map((trade) => {
@@ -349,15 +272,6 @@ document.addEventListener('DOMContentLoaded', () => {
             Object.values(recentTradesByCoin).forEach((list) => list.forEach((trade) => nextKeys.add(trade.key)));
             recentTradeKeys = nextKeys;
         }
-    };
-    const updateStrength = (coin) => {
-        const cutoff = Date.now() - STRENGTH_WINDOW_MS;
-        const trades = (recentTradesByCoin[coin] || []).filter((trade) => trade.timeMs >= cutoff);
-        let bid = 0;
-        let ask = 0;
-        trades.forEach((trade) => { trade.type === 'bid' ? bid += trade.volume : ask += trade.volume; });
-        const total = bid + ask;
-        marketStrengths[coin] = total > 0 ? { strength: ask > 0 ? (bid / ask) * 100 : 999, buyPressure: bid / total } : { strength: 100, buyPressure: 0.5 };
     };
     const applyTrades = (coin, trades) => {
         let changed = false;
@@ -389,24 +303,37 @@ document.addEventListener('DOMContentLoaded', () => {
         return changed;
     };
     const estimate = (tracker, now) => {
-        const liveFrom = Math.max(tracker.startTime, now - LIVE_WINDOW_MS);
-        const liveMinutes = Math.max((now - liveFrom) / 60000, 1 / 6);
         const elapsedMinutes = Math.max((now - tracker.startTime) / 60000, 1 / 6);
-        const liveVolume = (recentTradesByCoin[tracker.coin] || []).filter((trade) => trade.timeMs >= liveFrom && priceMatch(tracker.targetPrice, trade.price)).reduce((sum, trade) => sum + trade.volume, 0);
-        const liveSpeed = liveVolume / liveMinutes;
+        const recentWindowMinutes = Math.max(Math.min(elapsedMinutes, TREND_WINDOW_MINUTES), 1 / 6);
+        const recentFrom = now - (recentWindowMinutes * 60000);
+        const matchedRecentTrades = (recentTradesByCoin[tracker.coin] || []).filter((trade) => trade.timeMs >= recentFrom && trade.timeMs >= tracker.startTime && priceMatch(tracker.targetPrice, trade.price));
+        const recentVolume = matchedRecentTrades.reduce((sum, trade) => sum + trade.volume, 0);
+        const liveSpeed = recentVolume / recentWindowMinutes;
         const observedSpeed = tracker.accumulatedVol / elapsedMinutes;
-        const historical = tracker.historicalAnalysis || baseAnalysis(tracker);
-        const historicalSpeed = Math.max(0, Number(historical.speedPerMin) || 0);
-        const strength = marketStrengths[tracker.coin] || { strength: 100, buyPressure: 0.5 };
-        const multiplier = clamp(0.75 + (strength.buyPressure * 0.7), 0.65, 1.45);
-        let composite = historicalSpeed;
-        if (liveSpeed > 0 && observedSpeed > 0) composite = (historicalSpeed * 0.4) + (liveSpeed * 0.4) + (observedSpeed * 0.2);
-        else if (liveSpeed > 0) composite = (historicalSpeed * 0.55) + (liveSpeed * 0.45);
-        else if (observedSpeed > 0) composite = (historicalSpeed * 0.7) + (observedSpeed * 0.3);
-        composite = Math.max(composite * multiplier, historicalSpeed * 0.15, liveSpeed * 0.2, 0.000001);
-        const pending = historical.source === 'pending' && liveSpeed <= 0 && observedSpeed <= 0;
+        const hasRecentTrend = recentVolume > 0;
+        const hasAverageTrend = tracker.accumulatedVol > 0;
+        let composite = 0;
+
+        if (hasRecentTrend && hasAverageTrend) {
+            composite = (observedSpeed * 0.6) + (liveSpeed * 0.4);
+        } else if (hasAverageTrend) {
+            composite = observedSpeed;
+        } else if (hasRecentTrend) {
+            composite = liveSpeed;
+        }
+
+        const pending = elapsedMinutes < MIN_TRACKING_MINUTES || composite <= 0;
         const remainingMinutes = tracker.remainingQty <= 0 ? 0 : tracker.remainingQty / composite;
-        return { historical, liveSpeed, observedSpeed, composite, pending, remainingMinutes, etaMs: tracker.remainingQty <= 0 ? now : now + (remainingMinutes * 60000), strengthLabel: strength.strength >= 999 ? '999%+' : `${strength.strength.toFixed(1)}%` };
+        return {
+            liveSpeed,
+            observedSpeed,
+            composite,
+            pending,
+            remainingMinutes,
+            etaMs: tracker.remainingQty <= 0 || pending ? now : now + (remainingMinutes * 60000),
+            elapsedMinutes,
+            recentWindowMinutes
+        };
     };
     const renderCards = () => {
         updateActiveCount();
@@ -418,13 +345,14 @@ document.addEventListener('DOMContentLoaded', () => {
         trackerListEl.innerHTML = trackers.map((tracker) => {
             const stats = estimate(tracker, now);
             const remainingRatio = tracker.initialQty > 0 ? clamp((tracker.remainingQty / tracker.initialQty) * 100, 0, 100) : 0;
-            const completedRatio = tracker.initialQty > 0 ? clamp(((tracker.initialQty - tracker.remainingQty) / tracker.initialQty) * 100, 0, 100) : 0;
             const barWidth = tracker.remainingQty > 0 ? clamp(Math.max(remainingRatio, 4), 4, 100) : 0;
             const priceLabel = Number(tracker.targetPrice).toFixed(4);
             const etaLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '실시간 데이터 수집 중' : formatFullDate(stats.etaMs));
-            const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '30일 데이터 분석 중' : formatRemainingTime(stats.remainingMinutes));
-            const note = stats.historical.matchedDays > 0 ? `최근 ${stats.historical.daysAnalyzed}일 중 ${stats.historical.matchedDays}일 동안 ${priceLabel}원 가격대가 실제 거래 범위에 포함된 흐름을 반영했습니다.` : `최근 ${stats.historical.daysAnalyzed}일 캔들에서 ${priceLabel}원 가격대 직접 체결 범위가 적어 전체 거래량 대비 보수적으로 계산 중입니다.`;
-            return `<div class="tracker-card space-y-4"><div class="flex justify-between gap-4 items-start"><div class="space-y-2"><div class="text-white font-bold text-lg">${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span></div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span><span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span></div></div><button onclick="removeTracker(${tracker.id})" class="text-slate-600 hover:text-red-500 transition-colors"><span class="material-icons text-xl">delete_outline</span></button></div><div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5"><div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2"><span>현재 내 앞 잔여 물량</span><span class="text-white">${fmtNum(tracker.remainingQty)} 개</span></div><div class="progress-bar-bg"><div class="progress-bar-fill h-full" style="width:${barWidth}%"></div></div><div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500"><span>초기 ${fmtNum(tracker.initialQty)} 개</span><span>잔여 ${remainingRatio.toFixed(1)}%</span></div></div><div class="grid grid-cols-3 gap-2"><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">누적 차감 물량</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">최근 실시간 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">30일 가격대 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.historical.speedPerMin, tracker.targetPrice)}</div></div></div><div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span><span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">30일 분석 ${stats.historical.matchedDays}일 반영</span></div><div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">복합 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">누적 반영 속도 ${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</span></div><p class="text-[11px] text-slate-400 leading-relaxed">${note}</p></div></div>`;
+            const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '추적 데이터 수집 중' : formatRemainingTime(stats.remainingMinutes));
+            const note = stats.pending
+                ? '덱 추가 후 체결 데이터를 더 쌓는 중입니다. 실제 체결이 누적되면 최근 속도와 평균 속도를 함께 반영해 예상 시간을 계산합니다.'
+                : `덱 추가 후 ${formatRemainingTime(stats.elapsedMinutes)} 동안 누적된 속도와 최근 ${formatRemainingTime(stats.recentWindowMinutes)} 경향을 함께 반영했습니다.`;
+            return `<div class="tracker-card space-y-4"><div class="flex justify-between gap-4 items-start"><div class="space-y-2"><div class="text-white font-bold text-lg">${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span></div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span><span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span></div></div><button onclick="removeTracker(${tracker.id})" class="text-slate-600 hover:text-red-500 transition-colors"><span class="material-icons text-xl">delete_outline</span></button></div><div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5"><div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2"><span>현재 내 앞 잔여 물량</span><span class="text-white">${fmtNum(tracker.remainingQty)} 개</span></div><div class="progress-bar-bg"><div class="progress-bar-fill h-full" style="width:${barWidth}%"></div></div><div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500"><span>초기 ${fmtNum(tracker.initialQty)} 개</span><span>잔여 ${remainingRatio.toFixed(1)}%</span></div></div><div class="grid grid-cols-3 gap-2"><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">누적 차감 물량</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">최근 체결 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">추적 후 평균 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</div></div></div><div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span><span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">덱 추가 후 경향 기반</span></div><div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">최근 속도 ${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">예상 기준 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span></div><p class="text-[11px] text-slate-400 leading-relaxed">${note}</p></div></div>`;
         }).join('');
     };
     const pollTransactions = async () => {
@@ -437,23 +365,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (json.status !== '0000' || !Array.isArray(json.data)) continue;
                 const trades = buildTrades(coin, json.data);
                 pushRecentTrades(coin, trades);
-                updateStrength(coin);
                 if (applyTrades(coin, trades)) changed = true;
             } catch (error) {
                 console.error(`poll failed: ${coin}`, error);
             }
         }
         if (changed) saveTrackers();
-        renderCards();
-    };
-    const attachAnalysis = async (trackerId) => {
-        const tracker = trackers.find((item) => item.id === trackerId);
-        if (!tracker) return;
-        const next = await analyzeTracker(tracker);
-        const current = trackers.find((item) => item.id === trackerId);
-        if (!current) return;
-        current.historicalAnalysis = next;
-        saveTrackers();
         renderCards();
     };
     window.removeTracker = (id) => {
@@ -489,7 +406,6 @@ document.addEventListener('DOMContentLoaded', () => {
         calculateSync();
         addTrackerBtn.disabled = false;
         addTrackerBtn.innerText = '추적 덱에 추가하기';
-        attachAnalysis(trackerId);
     });
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
@@ -497,14 +413,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     window.addEventListener('pagehide', saveTrackers);
-    // 주기적으로 자동 저장 (30초마다)
     setInterval(() => { if (trackers.length > 0) saveTrackers(); }, 30000);
     targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
     updateInputLabels();
     renderCards();
-    // 부트 시퀀스: hydrate → 분석 → 폴링 (순차적으로)
     hydratePersistentState().then(() => {
-        refreshAnalyses();
         pollTransactions();
         setInterval(pollTransactions, POLL_INTERVAL_MS);
     });
