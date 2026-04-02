@@ -22,8 +22,8 @@ body {
     transform: scale(0.96);
 }
 .progress-bar-fill {
-    background: linear-gradient(90deg, #f37321, #ff9d5c);
-    box-shadow: 0 0 10px rgba(243, 115, 33, 0.4);
+    background: linear-gradient(90deg, #22d3ee, #34d399);
+    box-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
 }
 input[type="number"] {
     background: #181c23;
@@ -55,9 +55,10 @@ input[type="number"]:focus {
 }
 .progress-bar-bg {
     background: #0b0f15;
-    height: 12px;
+    height: 14px;
     border-radius: 100px;
     overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.05);
 }
 .stat-box {
     background: #0b0f15;

@@ -9,6 +9,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_RECENT_TRADES_PER_COIN = 1400;
     const PRICE_MATCH_TOLERANCE = 0.0000001;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
+    const STORAGE_DB_NAME = 'bithumb-estimator-db';
+    const STORAGE_DB_VERSION = 1;
+    const STORAGE_STORE_NAME = 'app-state';
+    const STORAGE_RECORD_KEY = 'trackers';
 
     const targetPriceInput = document.getElementById('targetPrice');
     const targetAmountInput = document.getElementById('targetAmount');
@@ -22,13 +26,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const activeCountEl = document.getElementById('active-count');
     const errorMsgEl = document.getElementById('error-msg');
 
+    const bootState = readLocalState();
     const candleCache = new Map();
-    let trackers = loadTrackers();
+    let trackers = normalizeTrackers(bootState.trackers);
     let currentInitialQty = 0;
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
     let marketStrengths = {};
     let recentTradesByCoin = {};
     let recentTradeKeys = new Set();
+    let lastSavedAt = Number(bootState.savedAt) || 0;
 
     const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
     const fmtNum = (num) => {
@@ -39,6 +45,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return safe.toLocaleString('ko-KR', { maximumFractionDigits: 6 });
     };
     const fmtRate = (num) => `${fmtNum(num)}개/분`;
+    const fmtKrw = (num) => `${Math.max(0, Math.round(num || 0)).toLocaleString('ko-KR')}원`;
+    const fmtKrwRate = (speedPerMin, price) => `${Math.max(0, Math.round((Number(speedPerMin) || 0) * (Number(price) || 0) * 60)).toLocaleString('ko-KR')}원/시간`;
     const formatFullDate = (ms) => {
         const d = new Date(ms);
         if (!Number.isFinite(ms) || Number.isNaN(d.getTime())) return '-';
@@ -75,9 +83,26 @@ document.addEventListener('DOMContentLoaded', () => {
             source: legacy > 0 ? 'legacy' : 'pending'
         };
     };
-    function loadTrackers() {
+    function readLocalState() {
         try {
-            return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
+            const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            if (Array.isArray(parsed)) {
+                return { savedAt: 0, trackers: parsed };
+            }
+            if (parsed && typeof parsed === 'object' && Array.isArray(parsed.trackers)) {
+                return {
+                    savedAt: Number(parsed.savedAt) || 0,
+                    trackers: parsed.trackers
+                };
+            }
+        } catch (error) {
+            console.error('Failed to read local state', error);
+        }
+        return { savedAt: 0, trackers: [] };
+    }
+    function normalizeTrackers(rawTrackers) {
+        try {
+            return (Array.isArray(rawTrackers) ? rawTrackers : [])
                 .map((t) => {
                     const startTime = Number(t.startTime) || Date.now();
                     const initialQty = Math.max(0, Number(t.initialQty) || 0);
@@ -103,11 +128,98 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
                 .filter(Boolean);
         } catch (error) {
-            console.error('Failed to load trackers', error);
+            console.error('Failed to normalize trackers', error);
             return [];
         }
     }
-    const saveTrackers = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(trackers));
+    function openStorageDb() {
+        return new Promise((resolve, reject) => {
+            if (!('indexedDB' in window)) {
+                resolve(null);
+                return;
+            }
+            const request = indexedDB.open(STORAGE_DB_NAME, STORAGE_DB_VERSION);
+            request.onupgradeneeded = () => {
+                const db = request.result;
+                if (!db.objectStoreNames.contains(STORAGE_STORE_NAME)) {
+                    db.createObjectStore(STORAGE_STORE_NAME, { keyPath: 'key' });
+                }
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+    async function readIndexedState() {
+        try {
+            const db = await openStorageDb();
+            if (!db) return null;
+            return await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORAGE_STORE_NAME, 'readonly');
+                const store = tx.objectStore(STORAGE_STORE_NAME);
+                const request = store.get(STORAGE_RECORD_KEY);
+                request.onsuccess = () => resolve(request.result || null);
+                request.onerror = () => reject(request.error);
+                tx.oncomplete = () => db.close();
+            });
+        } catch (error) {
+            console.error('Failed to read IndexedDB state', error);
+            return null;
+        }
+    }
+    async function writeIndexedState(payload) {
+        try {
+            const db = await openStorageDb();
+            if (!db) return;
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(STORAGE_STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORAGE_STORE_NAME);
+                store.put({ key: STORAGE_RECORD_KEY, ...payload });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error);
+            });
+            db.close();
+        } catch (error) {
+            console.error('Failed to write IndexedDB state', error);
+        }
+    }
+    async function hydratePersistentState() {
+        try {
+            if (navigator.storage?.persist) {
+                await navigator.storage.persist();
+            }
+        } catch (error) {
+            console.error('Storage persist request failed', error);
+        }
+
+        const indexedState = await readIndexedState();
+        const localState = readLocalState();
+        const candidate = (() => {
+            const indexedSavedAt = Number(indexedState?.savedAt) || 0;
+            const localSavedAt = Number(localState.savedAt) || 0;
+            if (indexedSavedAt > localSavedAt) return indexedState;
+            if (localSavedAt > indexedSavedAt) return localState;
+            return (indexedState?.trackers?.length || 0) > (localState.trackers?.length || 0) ? indexedState : localState;
+        })();
+
+        if (candidate && Array.isArray(candidate.trackers)) {
+            const normalized = normalizeTrackers(candidate.trackers);
+            const shouldApply = (Number(candidate.savedAt) || 0) > lastSavedAt || (normalized.length > trackers.length && lastSavedAt === 0);
+            if (shouldApply) {
+                trackers = normalized;
+                lastSavedAt = Number(candidate.savedAt) || lastSavedAt;
+                renderCards();
+            }
+        }
+
+        saveTrackers();
+    }
+    const saveTrackers = () => {
+        lastSavedAt = Date.now();
+        const payload = { savedAt: lastSavedAt, trackers };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        writeIndexedState(payload);
+    };
     const setError = (msg = '') => { if (errorMsgEl) errorMsgEl.innerText = msg; };
     const updateActiveCount = () => { if (activeCountEl) activeCountEl.innerText = String(trackers.length); };
     const updateInputLabels = () => {
@@ -279,12 +391,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const now = Date.now();
         trackerListEl.innerHTML = trackers.map((tracker) => {
             const stats = estimate(tracker, now);
-            const progress = tracker.initialQty > 0 ? clamp(((tracker.initialQty - tracker.remainingQty) / tracker.initialQty) * 100, 0, 100) : 0;
+            const remainingRatio = tracker.initialQty > 0 ? clamp((tracker.remainingQty / tracker.initialQty) * 100, 0, 100) : 0;
+            const completedRatio = tracker.initialQty > 0 ? clamp(((tracker.initialQty - tracker.remainingQty) / tracker.initialQty) * 100, 0, 100) : 0;
+            const barWidth = tracker.remainingQty > 0 ? clamp(Math.max(remainingRatio, 4), 4, 100) : 0;
             const priceLabel = Number(tracker.targetPrice).toFixed(4);
             const etaLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '실시간 데이터 수집 중' : formatFullDate(stats.etaMs));
             const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '30일 데이터 분석 중' : formatRemainingTime(stats.remainingMinutes));
             const note = stats.historical.matchedDays > 0 ? `최근 ${stats.historical.daysAnalyzed}일 중 ${stats.historical.matchedDays}일 동안 ${priceLabel}원 가격대가 실제 거래 범위에 포함된 흐름을 반영했습니다.` : `최근 ${stats.historical.daysAnalyzed}일 캔들에서 ${priceLabel}원 가격대 직접 체결 범위가 적어 전체 거래량 대비 보수적으로 계산 중입니다.`;
-            return `<div class="tracker-card space-y-4"><div class="flex justify-between gap-4 items-start"><div class="space-y-2"><div class="text-white font-bold text-lg">${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span></div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span><span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span></div></div><button onclick="removeTracker(${tracker.id})" class="text-slate-600 hover:text-red-500 transition-colors"><span class="material-icons text-xl">delete_outline</span></button></div><div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5"><div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2"><span>현재 내 앞 잔여 물량</span><span class="text-white">${fmtNum(tracker.remainingQty)} 개</span></div><div class="progress-bar-bg"><div class="progress-bar-fill h-full" style="width:${progress}%"></div></div><div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500"><span>초기 ${fmtNum(tracker.initialQty)} 개</span><span>${progress.toFixed(1)}% 진행</span></div></div><div class="grid grid-cols-2 gap-2"><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">누적 차감 물량</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">시장 체결강도</div><div class="text-[#f37321] font-mono text-sm font-bold mt-1">${stats.strengthLabel}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">최근 실시간 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtRate(stats.liveSpeed)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">30일 가격대 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtRate(stats.historical.speedPerMin)}</div></div></div><div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결 시각</span><span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">30일 분석 ${stats.historical.matchedDays}일 반영</span></div><div class="text-white font-extrabold text-xl leading-tight">${etaLabel}</div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">남은 시간 ${remainLabel}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">복합 속도 ${fmtRate(stats.composite)}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">실시간 누적 기준 ${fmtRate(stats.observedSpeed)}</span></div><p class="text-[11px] text-slate-400 leading-relaxed">${note}</p></div></div>`;
+            return `<div class="tracker-card space-y-4"><div class="flex justify-between gap-4 items-start"><div class="space-y-2"><div class="text-white font-bold text-lg">${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span></div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span><span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span></div></div><button onclick="removeTracker(${tracker.id})" class="text-slate-600 hover:text-red-500 transition-colors"><span class="material-icons text-xl">delete_outline</span></button></div><div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5"><div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2"><span>현재 내 앞 잔여 물량</span><span class="text-white">${fmtNum(tracker.remainingQty)} 개</span></div><div class="progress-bar-bg"><div class="progress-bar-fill h-full" style="width:${barWidth}%"></div></div><div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500"><span>초기 ${fmtNum(tracker.initialQty)} 개</span><span>잔여 ${remainingRatio.toFixed(1)}%</span></div></div><div class="grid grid-cols-3 gap-2"><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">누적 차감 물량</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">최근 실시간 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">30일 가격대 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.historical.speedPerMin, tracker.targetPrice)}</div></div></div><div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span><span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">30일 분석 ${stats.historical.matchedDays}일 반영</span></div><div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">복합 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">누적 반영 속도 ${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</span></div><p class="text-[11px] text-slate-400 leading-relaxed">${note}</p></div></div>`;
         }).join('');
     };
     const pollTransactions = async () => {
@@ -351,9 +465,16 @@ document.addEventListener('DOMContentLoaded', () => {
         addTrackerBtn.innerText = '추적 덱에 추가하기';
         attachAnalysis(trackerId);
     });
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            saveTrackers();
+        }
+    });
+    window.addEventListener('pagehide', saveTrackers);
     targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
     updateInputLabels();
     renderCards();
+    hydratePersistentState();
     refreshAnalyses();
     pollTransactions();
     setInterval(pollTransactions, POLL_INTERVAL_MS);
