@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const POLL_INTERVAL_MS = 3000;
     const MAX_PROCESSED_KEYS = 240;
     const MAX_RECENT_TRADES_PER_COIN = 1400;
-    const PRICE_MATCH_TOLERANCE = 0.0000001;
+    const PRICE_MATCH_TOLERANCE = 0.00005;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
     const STORAGE_DB_NAME = 'bithumb-estimator-db';
     const STORAGE_DB_VERSION = 1;
@@ -68,7 +68,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const parsed = Date.parse(String(value || '').replace(' ', 'T'));
         return Number.isNaN(parsed) ? Date.now() : parsed;
     };
-    const priceMatch = (target, price) => Math.abs(Number(target) - Number(price)) < PRICE_MATCH_TOLERANCE;
+    const priceMatch = (target, price) => {
+        const t = Number(target);
+        const p = Number(price);
+        if (Math.abs(t - p) < PRICE_MATCH_TOLERANCE) return true;
+        // 문자열 기반 비교 (소수 4자리) - 부동소수점 오차 방지
+        const tStr = t.toFixed(4);
+        const pStr = p.toFixed(4);
+        return tStr === pStr;
+    };
     const baseAnalysis = (tracker = {}) => {
         const legacy = Number(tracker.baseTotalSpeedPerMin || tracker.baseSpeedPerMin || 0);
         return {
@@ -194,31 +202,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const indexedState = await readIndexedState();
         const localState = readLocalState();
-        const candidate = (() => {
-            const indexedSavedAt = Number(indexedState?.savedAt) || 0;
-            const localSavedAt = Number(localState.savedAt) || 0;
-            if (indexedSavedAt > localSavedAt) return indexedState;
-            if (localSavedAt > indexedSavedAt) return localState;
-            return (indexedState?.trackers?.length || 0) > (localState.trackers?.length || 0) ? indexedState : localState;
-        })();
 
-        if (candidate && Array.isArray(candidate.trackers)) {
-            const normalized = normalizeTrackers(candidate.trackers);
-            const shouldApply = (Number(candidate.savedAt) || 0) > lastSavedAt || (normalized.length > trackers.length && lastSavedAt === 0);
-            if (shouldApply) {
+        // 모든 소스 중 가장 최신이고 데이터가 많은 것을 선택
+        const candidates = [
+            { source: 'indexed', savedAt: Number(indexedState?.savedAt) || 0, trackers: indexedState?.trackers },
+            { source: 'local', savedAt: Number(localState.savedAt) || 0, trackers: localState.trackers },
+            { source: 'boot', savedAt: lastSavedAt, trackers }
+        ].filter(c => Array.isArray(c.trackers) && c.trackers.length > 0);
+
+        // savedAt 기준 정렬, 같으면 트래커 수가 많은 것 우선
+        candidates.sort((a, b) => {
+            if (b.savedAt !== a.savedAt) return b.savedAt - a.savedAt;
+            return b.trackers.length - a.trackers.length;
+        });
+
+        const best = candidates[0];
+        if (best && Array.isArray(best.trackers) && best.trackers.length > 0) {
+            const normalized = normalizeTrackers(best.trackers);
+            if (normalized.length > 0) {
                 trackers = normalized;
-                lastSavedAt = Number(candidate.savedAt) || lastSavedAt;
+                lastSavedAt = best.savedAt || Date.now();
+                console.log(`[hydrate] restored ${trackers.length} trackers from ${best.source} (savedAt: ${new Date(lastSavedAt).toISOString()})`);
                 renderCards();
             }
         }
 
+        // 즉시 양쪽 저장소에 동기화
         saveTrackers();
     }
     const saveTrackers = () => {
         lastSavedAt = Date.now();
         const payload = { savedAt: lastSavedAt, trackers };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-        writeIndexedState(payload);
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        } catch (error) {
+            console.error('Failed to save to localStorage', error);
+        }
+        writeIndexedState(payload).catch(err => console.error('Failed to save to IndexedDB', err));
     };
     const setError = (msg = '') => { if (errorMsgEl) errorMsgEl.innerText = msg; };
     const updateActiveCount = () => { if (activeCountEl) activeCountEl.innerText = String(trackers.length); };
@@ -345,7 +365,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const seen = new Set(tracker.processedTradeKeys || []);
             let trackerChanged = false;
             trades.forEach((trade) => {
-                if (seen.has(trade.key) || trade.timeMs + 1000 < tracker.startTime || !priceMatch(tracker.targetPrice, trade.price)) return;
+                // 이미 처리된 체결이면 스킵
+                if (seen.has(trade.key)) return;
+                // 트래커 시작보다 5초 이상 이전 체결은 무시 (기존 1초 → 5초로 여유 확대)
+                if (trade.timeMs + 5000 < tracker.startTime) return;
+                // 가격 매칭 확인
+                if (!priceMatch(tracker.targetPrice, trade.price)) return;
                 seen.add(trade.key);
                 tracker.lastSeenTradeAt = Math.max(tracker.lastSeenTradeAt || tracker.startTime, trade.timeMs);
                 trackerChanged = true;
@@ -355,6 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 tracker.accumulatedVol += applied;
                 tracker.remainingQty = Math.max(0, tracker.remainingQty - applied);
                 tracker.lastMatchedAt = trade.timeMs;
+                console.log(`[trade matched] ${coin} @ ${trade.price} vol=${applied} remaining=${tracker.remainingQty}`);
             });
             if (!trackerChanged) return;
             tracker.processedTradeKeys = Array.from(seen).slice(-MAX_PROCESSED_KEYS);
@@ -471,11 +497,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     window.addEventListener('pagehide', saveTrackers);
+    // 주기적으로 자동 저장 (30초마다)
+    setInterval(() => { if (trackers.length > 0) saveTrackers(); }, 30000);
     targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
     updateInputLabels();
     renderCards();
-    hydratePersistentState();
-    refreshAnalyses();
-    pollTransactions();
-    setInterval(pollTransactions, POLL_INTERVAL_MS);
+    // 부트 시퀀스: hydrate → 분석 → 폴링 (순차적으로)
+    hydratePersistentState().then(() => {
+        refreshAnalyses();
+        pollTransactions();
+        setInterval(pollTransactions, POLL_INTERVAL_MS);
+    });
 });
