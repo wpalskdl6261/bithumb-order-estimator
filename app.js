@@ -13,7 +13,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const STORAGE_DB_VERSION = 1;
     const STORAGE_STORE_NAME = 'app-state';
     const STORAGE_RECORD_KEY = 'trackers';
-    const TRACKER_FORM_COLLAPSED_KEY = 'bithumb_tracker_form_collapsed_v1';
 
     const targetPriceInput = document.getElementById('targetPrice');
     const targetAmountInput = document.getElementById('targetAmount');
@@ -39,15 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let recentTradeKeys = new Set();
     let lastSavedAt = Number(bootState.savedAt) || 0;
     const defaultAddTrackerBtnHtml = addTrackerBtn ? addTrackerBtn.innerHTML : '';
-    const storedTrackerFormCollapsed = (() => {
-        try {
-            return localStorage.getItem(TRACKER_FORM_COLLAPSED_KEY);
-        } catch (error) {
-            console.error('Failed to read tracker form state', error);
-            return null;
-        }
-    })();
-    let trackerFormCollapsed = storedTrackerFormCollapsed === null ? trackers.length > 0 : storedTrackerFormCollapsed === '1';
+    let trackerFormCollapsed = trackers.length > 0;
 
     const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
     const setAddTrackerButtonState = (isLoading) => {
@@ -228,9 +219,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (normalized.length > 0) {
                 trackers = normalized;
                 lastSavedAt = best.savedAt || Date.now();
-                if (storedTrackerFormCollapsed === null && trackers.length > 0) {
-                    trackerFormCollapsed = true;
-                }
+                trackerFormCollapsed = trackers.length > 0;
                 console.log(`[hydrate] restored ${trackers.length} trackers from ${best.source} (savedAt: ${new Date(lastSavedAt).toISOString()})`);
                 renderCards();
             }
@@ -326,13 +315,6 @@ document.addEventListener('DOMContentLoaded', () => {
         currentInitialQty = amount;
         syncText.innerText = `= \uB300\uAE30 \uC6D0\uD654 ${fmtKrwValue(amount, price)}`;
     };
-    const persistTrackerFormCollapsed = () => {
-        try {
-            localStorage.setItem(TRACKER_FORM_COLLAPSED_KEY, trackerFormCollapsed ? '1' : '0');
-        } catch (error) {
-            console.error('Failed to persist tracker form state', error);
-        }
-    };
     const getTrackerFormSummary = () => {
         if (!trackerFormCollapsed) return '코인, 가격, 수량을 입력해 추적을 시작하세요.';
         if (trackers.length > 0) return `${trackers.length}개 추적 중 · 눌러서 새 추적 추가`;
@@ -353,11 +335,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     : '\uCF54\uC778, \uAC00\uACA9, \uC218\uB7C9 \uC785\uB825');
         }
     };
-    const setTrackerFormCollapsed = (nextState, options = {}) => {
-        const { remember = true } = options;
+    const setTrackerFormCollapsed = (nextState) => {
         trackerFormCollapsed = Boolean(nextState);
         refreshTrackerFormState();
-        if (remember) persistTrackerFormCollapsed();
     };
 
     const buildTrades = (coin, rawTrades) => {
@@ -468,7 +448,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const renderCards = () => {
         if (trackers.length === 0 && trackerFormCollapsed) {
             trackerFormCollapsed = false;
-            persistTrackerFormCollapsed();
         }
         refreshTrackerFormState();
         updateActiveCount();
