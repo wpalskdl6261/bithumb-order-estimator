@@ -1,18 +1,19 @@
 document.addEventListener('DOMContentLoaded', () => {
     const STORAGE_KEY = 'bithumb_trackers_v2';
     const ANALYSIS_VERSION = 2;
-    const LIVE_WINDOW_MS = 6 * 60 * 60 * 1000;
-    const TREND_WINDOW_MINUTES = 120;
+    const LIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
+    const TREND_WINDOW_MINUTES = 24 * 60;
     const MIN_TRACKING_MINUTES = 5;
     const POLL_INTERVAL_MS = 3000;
     const MAX_PROCESSED_KEYS = 240;
-    const MAX_RECENT_TRADES_PER_COIN = 4000;
+    const MAX_RECENT_TRADES_PER_COIN = 60000;
     const PRICE_MATCH_TOLERANCE = 0.00005;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
     const STORAGE_DB_NAME = 'bithumb-estimator-db';
     const STORAGE_DB_VERSION = 1;
     const STORAGE_STORE_NAME = 'app-state';
     const STORAGE_RECORD_KEY = 'trackers';
+    const TRACKER_FORM_COLLAPSED_KEY = 'bithumb_tracker_form_collapsed_v1';
 
     const targetPriceInput = document.getElementById('targetPrice');
     const targetAmountInput = document.getElementById('targetAmount');
@@ -25,6 +26,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const trackerListEl = document.getElementById('tracker-list');
     const activeCountEl = document.getElementById('active-count');
     const errorMsgEl = document.getElementById('error-msg');
+    const trackerFormPanelEl = document.getElementById('tracker-form-panel');
+    const trackerFormBodyEl = document.getElementById('trackerFormBody');
+    const trackerFormToggleEl = document.getElementById('trackerFormToggle');
+    const trackerFormSummaryEl = document.getElementById('trackerFormSummary');
 
     const bootState = readLocalState();
     let trackers = normalizeTrackers(bootState.trackers);
@@ -33,8 +38,25 @@ document.addEventListener('DOMContentLoaded', () => {
     let recentTradesByCoin = {};
     let recentTradeKeys = new Set();
     let lastSavedAt = Number(bootState.savedAt) || 0;
+    const defaultAddTrackerBtnHtml = addTrackerBtn ? addTrackerBtn.innerHTML : '';
+    const storedTrackerFormCollapsed = (() => {
+        try {
+            return localStorage.getItem(TRACKER_FORM_COLLAPSED_KEY);
+        } catch (error) {
+            console.error('Failed to read tracker form state', error);
+            return null;
+        }
+    })();
+    let trackerFormCollapsed = storedTrackerFormCollapsed === null ? trackers.length > 0 : storedTrackerFormCollapsed === '1';
 
     const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+    const setAddTrackerButtonState = (isLoading) => {
+        if (!addTrackerBtn) return;
+        addTrackerBtn.disabled = isLoading;
+        addTrackerBtn.innerHTML = isLoading
+            ? `<span class="material-icons text-[18px] animate-spin">sync</span><span>추적 생성 중</span>`
+            : defaultAddTrackerBtnHtml;
+    };
     const fmtNum = (num) => {
         if (!Number.isFinite(num)) return '0';
         const safe = Math.max(0, num);
@@ -42,6 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (safe >= 1) return safe.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
         return safe.toLocaleString('ko-KR', { maximumFractionDigits: 6 });
     };
+    const fmtKrwValue = (qty, price) => `${Math.max(0, Math.round((Number(qty) || 0) * (Number(price) || 0))).toLocaleString('ko-KR')}원`;
     const fmtKrwRate = (speedPerMin, price) => `${Math.max(0, Math.round((Number(speedPerMin) || 0) * (Number(price) || 0) * 60)).toLocaleString('ko-KR')}원/시간`;
     const formatFullDate = (ms) => {
         const d = new Date(ms);
@@ -205,6 +228,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (normalized.length > 0) {
                 trackers = normalized;
                 lastSavedAt = best.savedAt || Date.now();
+                if (storedTrackerFormCollapsed === null && trackers.length > 0) {
+                    trackerFormCollapsed = true;
+                }
                 console.log(`[hydrate] restored ${trackers.length} trackers from ${best.source} (savedAt: ${new Date(lastSavedAt).toISOString()})`);
                 renderCards();
             }
@@ -248,6 +274,90 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         currentInitialQty = amount;
         syncText.innerText = `= 내 앞 대기 원화 약 ${fmtNum(amount * price)} 원`;
+    };
+
+    /*
+    const updateInputLabelsCompact = () => {
+        const type = document.querySelector('input[name="input_type"]:checked')?.value || 'KRW';
+        amountLabel.innerText = type === 'KRW' ? '대기 원화' : '대기 코인';
+        amountPostfix.innerText = type === 'KRW' ? '원' : '개';
+        targetAmountInput.placeholder = type === 'KRW' ? '예: 10000000' : '예: 5000000000';
+        calculateSyncCompact();
+    };
+    const calculateSyncCompact = () => {
+        const type = document.querySelector('input[name="input_type"]:checked')?.value || 'KRW';
+        const price = Number(targetPriceInput.value);
+        const amount = Number(targetAmountInput.value);
+        if (!Number.isFinite(price) || !Number.isFinite(amount) || price <= 0 || amount <= 0) {
+            syncText.innerText = '= 대기 중..';
+            currentInitialQty = 0;
+            return;
+        }
+        if (type === 'KRW') {
+            currentInitialQty = amount / price;
+            syncText.innerText = `= 대기 코인 수량 ${fmtNum(currentInitialQty)} 개`;
+            return;
+        }
+        currentInitialQty = amount;
+        syncText.innerText = `= 대기 원화 ${fmtKrwValue(amount, price)}`;
+    };
+    */
+    const updateInputLabelsCompact = () => {
+        const type = document.querySelector('input[name="input_type"]:checked')?.value || 'KRW';
+        amountLabel.innerText = type === 'KRW' ? '\uB300\uAE30 \uC6D0\uD654' : '\uB300\uAE30 \uCF54\uC778';
+        amountPostfix.innerText = type === 'KRW' ? '\uC6D0' : '\uAC1C';
+        targetAmountInput.placeholder = type === 'KRW' ? '\uC608: 10000000' : '\uC608: 5000000000';
+        calculateSyncCompact();
+    };
+    const calculateSyncCompact = () => {
+        const type = document.querySelector('input[name="input_type"]:checked')?.value || 'KRW';
+        const price = Number(targetPriceInput.value);
+        const amount = Number(targetAmountInput.value);
+        if (!Number.isFinite(price) || !Number.isFinite(amount) || price <= 0 || amount <= 0) {
+            syncText.innerText = '= \uB300\uAE30 \uC911..';
+            currentInitialQty = 0;
+            return;
+        }
+        if (type === 'KRW') {
+            currentInitialQty = amount / price;
+            syncText.innerText = `= \uB300\uAE30 \uCF54\uC778 \uC218\uB7C9 ${fmtNum(currentInitialQty)} \uAC1C`;
+            return;
+        }
+        currentInitialQty = amount;
+        syncText.innerText = `= \uB300\uAE30 \uC6D0\uD654 ${fmtKrwValue(amount, price)}`;
+    };
+    const persistTrackerFormCollapsed = () => {
+        try {
+            localStorage.setItem(TRACKER_FORM_COLLAPSED_KEY, trackerFormCollapsed ? '1' : '0');
+        } catch (error) {
+            console.error('Failed to persist tracker form state', error);
+        }
+    };
+    const getTrackerFormSummary = () => {
+        if (!trackerFormCollapsed) return '코인, 가격, 수량을 입력해 추적을 시작하세요.';
+        if (trackers.length > 0) return `${trackers.length}개 추적 중 · 눌러서 새 추적 추가`;
+        return '코인, 가격, 수량 입력';
+    };
+    const refreshTrackerFormState = () => {
+        if (trackerFormPanelEl) trackerFormPanelEl.classList.toggle('is-collapsed', trackerFormCollapsed);
+        if (trackerFormBodyEl) trackerFormBodyEl.hidden = trackerFormCollapsed;
+        if (trackerFormToggleEl) {
+            trackerFormToggleEl.setAttribute('aria-expanded', String(!trackerFormCollapsed));
+            trackerFormToggleEl.innerHTML = `<span class="material-icons text-[18px]">${trackerFormCollapsed ? 'expand_more' : 'expand_less'}</span>`;
+        }
+        if (trackerFormSummaryEl) {
+            trackerFormSummaryEl.innerText = !trackerFormCollapsed
+                ? '\uCF54\uC778, \uAC00\uACA9, \uC218\uB7C9\uC744 \uC785\uB825\uD574 \uCD94\uC801\uC744 \uC2DC\uC791\uD558\uC138\uC694.'
+                : (trackers.length > 0
+                    ? `${trackers.length}\uAC1C \uCD94\uC801 \uC911 \u00B7 \uB20C\uB7EC\uC11C \uC0C8 \uCD94\uC801 \uCD94\uAC00`
+                    : '\uCF54\uC778, \uAC00\uACA9, \uC218\uB7C9 \uC785\uB825');
+        }
+    };
+    const setTrackerFormCollapsed = (nextState, options = {}) => {
+        const { remember = true } = options;
+        trackerFormCollapsed = Boolean(nextState);
+        refreshTrackerFormState();
+        if (remember) persistTrackerFormCollapsed();
     };
 
     const buildTrades = (coin, rawTrades) => {
@@ -335,7 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
             recentWindowMinutes
         };
     };
-    const renderCards = () => {
+    const legacyRenderCards = () => {
         updateActiveCount();
         if (trackers.length === 0) {
             trackerListEl.innerHTML = `<div class="border-2 border-dashed border-white/5 rounded-3xl p-12 text-center"><div class="w-16 h-16 bg-[#181c23] rounded-2xl flex items-center justify-center mx-auto mb-6"><span class="material-icons text-slate-600 text-3xl">hourglass_empty</span></div><h4 class="text-white font-bold text-xl mb-2">진행 중인 추적이 없습니다</h4><p class="text-slate-500 text-sm leading-relaxed px-4">시작하려면 상단 양식에서 코인과 물량을 입력하여 추적을 시작하세요.</p></div>`;
@@ -353,6 +463,111 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? '덱 추가 후 체결 데이터를 더 쌓는 중입니다. 실제 체결이 누적되면 최근 속도와 평균 속도를 함께 반영해 예상 시간을 계산합니다.'
                 : `덱 추가 후 ${formatRemainingTime(stats.elapsedMinutes)} 동안 누적된 속도와 최근 ${formatRemainingTime(stats.recentWindowMinutes)} 경향을 함께 반영했습니다.`;
             return `<div class="tracker-card space-y-4"><div class="flex justify-between gap-4 items-start"><div class="space-y-2"><div class="text-white font-bold text-lg">${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span></div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span><span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span></div></div><button onclick="removeTracker(${tracker.id})" class="text-slate-600 hover:text-red-500 transition-colors"><span class="material-icons text-xl">delete_outline</span></button></div><div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5"><div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2"><span>현재 내 앞 잔여 물량</span><span class="text-white">${fmtNum(tracker.remainingQty)} 개</span></div><div class="progress-bar-bg"><div class="progress-bar-fill h-full" style="width:${barWidth}%"></div></div><div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500"><span>초기 ${fmtNum(tracker.initialQty)} 개</span><span>잔여 ${remainingRatio.toFixed(1)}%</span></div></div><div class="grid grid-cols-3 gap-2"><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">누적 차감 물량</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">최근 체결 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">추적 후 평균 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</div></div></div><div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span><span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">덱 추가 후 경향 기반</span></div><div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">최근 속도 ${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">예상 기준 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span></div><p class="text-[11px] text-slate-400 leading-relaxed">${note}</p></div></div>`;
+        }).join('');
+    };
+    const renderCards = () => {
+        if (trackers.length === 0 && trackerFormCollapsed) {
+            trackerFormCollapsed = false;
+            persistTrackerFormCollapsed();
+        }
+        refreshTrackerFormState();
+        updateActiveCount();
+        if (trackers.length === 0) {
+            trackerListEl.innerHTML = `
+                <div class="border-2 border-dashed border-white/5 rounded-3xl p-12 text-center">
+                    <div class="w-16 h-16 bg-[#181c23] rounded-2xl flex items-center justify-center mx-auto mb-6">
+                        <span class="material-icons text-slate-600 text-3xl">hourglass_empty</span>
+                    </div>
+                    <h4 class="text-white font-bold text-xl mb-2">진행 중인 추적 덱이 없습니다</h4>
+                    <p class="text-slate-500 text-sm leading-relaxed px-4">상단 입력값으로 코인과 수량을 넣고 추적을 시작해 보세요.</p>
+                </div>
+            `;
+            return;
+        }
+
+        const now = Date.now();
+        trackerListEl.innerHTML = trackers.map((tracker) => {
+            const stats = estimate(tracker, now);
+            const remainingRatio = tracker.initialQty > 0 ? clamp((tracker.remainingQty / tracker.initialQty) * 100, 0, 100) : 0;
+            const barWidth = tracker.remainingQty > 0 ? clamp(Math.max(remainingRatio, 4), 4, 100) : 0;
+            const priceLabel = Number(tracker.targetPrice).toFixed(4);
+            const etaLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '데이터 수집 중' : formatFullDate(stats.etaMs));
+            const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '추적 데이터 수집 중' : formatRemainingTime(stats.remainingMinutes));
+            const note = stats.pending
+                ? '덱 추가 후 체결 데이터가 더 쌓이면 누적 체결량과 최근 24시간 체결량을 함께 반영해 예상 시간을 계산합니다.'
+                : '덱 추가 후 누적 체결량과 최근 24시간 체결량을 함께 반영합니다. 추적 시간이 24시간보다 짧으면 현재까지 수집된 데이터만 사용합니다.';
+
+            return `
+                <div class="tracker-card space-y-4">
+                    <div class="flex justify-between gap-4 items-start">
+                        <div class="space-y-2">
+                            <div class="text-white font-bold text-lg">
+                                ${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span>
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span>
+                                <span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span>
+                            </div>
+                        </div>
+                        <button type="button" onclick="removeTracker(${tracker.id})" class="tracker-delete-btn" aria-label="${tracker.coin} 추적 삭제">
+                            <span class="material-icons text-[20px]">delete_outline</span>
+                        </button>
+                    </div>
+                    <div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5">
+                        <div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2">
+                            <span>현재 남아 있는 수량</span>
+                            <span class="text-white">${fmtNum(tracker.remainingQty)} 개</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill h-full" style="width:${barWidth}%"></div>
+                        </div>
+                        <div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500">
+                            <span>초기 ${fmtNum(tracker.initialQty)} 개</span>
+                            <span>잔량 ${remainingRatio.toFixed(1)}%</span>
+                        </div>
+                    </div>
+                    <div class="stat-box stat-box-wide">
+                        <div class="text-[10px] font-bold text-slate-500 uppercase">누적 차감 물량</div>
+                        <div class="stat-pair mt-2">
+                            <div>
+                                <div class="stat-value">${fmtNum(tracker.accumulatedVol)} 개</div>
+                                <div class="stat-value-sub">코인 수량</div>
+                            </div>
+                            <div class="text-right">
+                                <div class="stat-value stat-accent">${fmtKrwValue(tracker.accumulatedVol, tracker.targetPrice)}</div>
+                                <div class="stat-value-sub">환산 (원)</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div class="stat-box">
+                            <div class="text-[9px] font-bold text-slate-500 uppercase">추적 누적 체결량</div>
+                            <div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="text-[9px] font-bold text-slate-500 uppercase">최근 24시간 속도</div>
+                            <div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="text-[9px] font-bold text-slate-500 uppercase">덱 추가 후 평균 속도</div>
+                            <div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</div>
+                        </div>
+                    </div>
+                    <div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3">
+                        <div class="flex items-center justify-between gap-2 flex-wrap">
+                            <span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span>
+                            <span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">누적 + 최근 24시간 기준</span>
+                        </div>
+                        <div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div>
+                        <div class="flex flex-wrap gap-2">
+                            <span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span>
+                            <span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">최근 24시간 속도 ${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</span>
+                            <span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">예상 기준 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span>
+                        </div>
+                        <p class="text-[11px] text-slate-400 leading-relaxed">${note}</p>
+                    </div>
+                </div>
+            `;
         }).join('');
     };
     const pollTransactions = async () => {
@@ -374,18 +589,27 @@ document.addEventListener('DOMContentLoaded', () => {
         renderCards();
     };
     window.removeTracker = (id) => {
+        const tracker = trackers.find((item) => item.id === id);
+        if (!tracker) return;
+        const confirmed = window.confirm(`${tracker.coin} ${Number(tracker.targetPrice).toFixed(4)} KRW 추적 덱을 정말 삭제할까요?\n삭제한 추적 데이터는 복구되지 않습니다.`);
+        if (!confirmed) return;
         trackers = trackers.filter((tracker) => tracker.id !== id);
         saveTrackers();
         renderCards();
     };
-    radioInputTypes.forEach((radio) => radio.addEventListener('change', updateInputLabels));
+    radioInputTypes.forEach((radio) => radio.addEventListener('change', updateInputLabelsCompact));
     radioCoins.forEach((radio) => radio.addEventListener('change', (event) => {
         selectedCoin = event.target.value;
         targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
-        calculateSync();
+        calculateSyncCompact();
     }));
-    targetAmountInput.addEventListener('input', calculateSync);
-    targetPriceInput.addEventListener('input', calculateSync);
+    if (trackerFormToggleEl) {
+        trackerFormToggleEl.addEventListener('click', () => {
+            setTrackerFormCollapsed(!trackerFormCollapsed);
+        });
+    }
+    targetAmountInput.addEventListener('input', calculateSyncCompact);
+    targetPriceInput.addEventListener('input', calculateSyncCompact);
     addTrackerBtn.addEventListener('click', () => {
         setError();
         const price = Number(targetPriceInput.value);
@@ -395,17 +619,16 @@ document.addEventListener('DOMContentLoaded', () => {
             setError('올바른 가격과 수량을 입력해주세요.');
             return;
         }
-        addTrackerBtn.disabled = true;
-        addTrackerBtn.innerText = '추적 생성 중...';
+        setAddTrackerButtonState(true);
         const startTime = Date.now();
         const trackerId = Date.now();
         trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, historicalAnalysis: baseAnalysis() }, ...trackers];
         saveTrackers();
         renderCards();
         targetAmountInput.value = '';
-        calculateSync();
-        addTrackerBtn.disabled = false;
-        addTrackerBtn.innerText = '추적 덱에 추가하기';
+        calculateSyncCompact();
+        setTrackerFormCollapsed(true);
+        setAddTrackerButtonState(false);
     });
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
@@ -415,7 +638,8 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('pagehide', saveTrackers);
     setInterval(() => { if (trackers.length > 0) saveTrackers(); }, 30000);
     targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
-    updateInputLabels();
+    updateInputLabelsCompact();
+    refreshTrackerFormState();
     renderCards();
     hydratePersistentState().then(() => {
         pollTransactions();

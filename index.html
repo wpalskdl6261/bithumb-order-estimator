@@ -21,7 +21,7 @@
         <span class="text-slate-400 text-xs font-bold">v1.0.4</span>
     </header>
 
-    <div class="max-w-md mx-auto">
+    <div class="max-w-lg mx-auto">
         
         <!-- Header Section -->
         <div class="text-center mb-8">
@@ -30,17 +30,26 @@
         </div>
 
         <!-- Add Tracker Form -->
-        <div class="glass-panel rounded-3xl p-6 mb-8 orange-glow">
-            <h2 class="flex items-center gap-2 text-white font-bold text-lg mb-6">
+        <div id="tracker-form-panel" class="glass-panel tracker-form-panel rounded-3xl p-5 mb-6 orange-glow">
+            <div class="flex items-start justify-between gap-4">
+                <div class="min-w-0">
+                    <h2 class="flex items-center gap-2 text-white font-bold text-base">
                 <span class="material-icons text-[#f37321]">add_circle</span>
                 신규 체결 추적 추가
-            </h2>
+                    </h2>
+                    <p id="trackerFormSummary" class="tracker-form-summary text-slate-400 text-xs leading-relaxed mt-1">코인, 가격, 수량을 입력해 추적을 시작하세요.</p>
+                </div>
+                <button id="trackerFormToggle" type="button" class="tracker-form-toggle" aria-label="toggle tracker form" aria-expanded="true">
+                    <span class="material-icons text-[18px]">expand_less</span>
+                </button>
+            </div>
 
-            <div class="space-y-6">
+            <div id="trackerFormBody" class="tracker-form-body mt-4">
+            <div class="space-y-4">
                 <!-- Coin Selection -->
                 <div>
                     <label class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">대상 코인 선택</label>
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-2">
                         <label class="radio-btn relative cursor-pointer">
                             <input type="radio" name="coin" value="NFT" checked class="absolute opacity-0">
                             <span class="flex items-center justify-center p-3 rounded-xl font-bold text-sm transition-all">APENFT (NFT)</span>
@@ -56,7 +65,7 @@
                 <div>
                     <label class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">현재 기준 주문 가격 (KRW)</label>
                     <div class="relative">
-                        <input type="number" id="targetPrice" value="0.0004" step="0.0001" class="w-full p-4 rounded-xl font-mono text-xl text-[#f37321] font-bold">
+                        <input type="number" id="targetPrice" value="0.0004" step="0.0001" class="w-full px-4 py-3 rounded-xl font-mono text-lg text-[#f37321] font-bold">
                         <span class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">₩</span>
                     </div>
                 </div>
@@ -64,7 +73,7 @@
                 <!-- Input Type -->
                 <div>
                     <label class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">대기 물량 입력 기준</label>
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-2">
                         <label class="radio-btn relative cursor-pointer">
                             <input type="radio" name="input_type" value="KRW" checked class="absolute opacity-0">
                             <span class="flex items-center justify-center p-3 rounded-xl font-bold text-sm transition-all">원화(₩)</span>
@@ -80,14 +89,15 @@
                 <div>
                     <label id="amount-label" class="block text-slate-400 text-xs font-bold uppercase tracking-wider mb-3">내 앞 대기 원화</label>
                     <div class="relative">
-                        <input type="number" id="targetAmount" placeholder="예: 10,000,000" class="w-full p-4 rounded-xl font-mono text-lg">
+                        <input type="number" id="targetAmount" placeholder="예: 10,000,000" class="w-full px-4 py-3 rounded-xl font-mono text-base">
                         <span id="amount-postfix" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 font-bold">원</span>
                     </div>
                     <p id="sync-text" class="text-[#f37321] text-sm font-bold mt-2">= 대기 중...</p>
                 </div>
 
-                <button id="addTrackerBtn" class="btn-primary w-full py-5 rounded-2xl text-white font-black text-lg flex items-center justify-center gap-2 shadow-xl">
-                    추적 덱에 추가하기
+                <button id="addTrackerBtn" type="button" class="btn-primary tracker-add-btn w-full rounded-2xl text-white shadow-xl">
+                    <span class="material-icons text-[18px]">playlist_add</span>
+                    <span>추적 덱에 추가</span>
                 </button>
                 <p id="error-msg" class="text-center text-sm text-red-400 font-semibold min-h-[20px]"></p>
 
@@ -95,6 +105,7 @@
                     <span class="material-icons text-[12px] align-middle">info</span>
                     덱 추가 이후 누적 속도와 최근 속도를 함께 비교해 예상 체결 시간을 계산합니다.
                 </p>
+            </div>
             </div>
         </div>
 
