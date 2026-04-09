@@ -173,6 +173,12 @@ input[type="number"]:focus {
 .stat-accent {
     color: #f8b06b;
 }
+.stat-box-wide .stat-value-sub {
+    display: none;
+}
+.stat-box-wide .stat-pair {
+    align-items: center;
+}
 .tracker-card .grid.grid-cols-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
