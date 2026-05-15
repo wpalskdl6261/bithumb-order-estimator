@@ -222,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 trackerFormCollapsed = trackers.length > 0;
                 console.log(`[hydrate] restored ${trackers.length} trackers from ${best.source} (savedAt: ${new Date(lastSavedAt).toISOString()})`);
                 renderCards();
+                saveTrackers();
             }
         }
 
@@ -614,6 +615,7 @@ document.addEventListener('DOMContentLoaded', () => {
             saveTrackers();
         }
     });
+    window.addEventListener('beforeunload', saveTrackers);
     window.addEventListener('pagehide', saveTrackers);
     setInterval(() => { if (trackers.length > 0) saveTrackers(); }, 30000);
     targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
