@@ -9,10 +9,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_RECENT_TRADES_PER_COIN = 60000;
     const PRICE_MATCH_TOLERANCE = 0.00005;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
+    const STORAGE_BACKUP_KEY = 'bithumb_trackers_v2_backup';
     const STORAGE_DB_NAME = 'bithumb-estimator-db';
     const STORAGE_DB_VERSION = 1;
     const STORAGE_STORE_NAME = 'app-state';
     const STORAGE_RECORD_KEY = 'trackers';
+    const STORAGE_OPEN_TIMEOUT_MS = 4000;
+    const MAX_TOMBSTONES = 100;
 
     const targetPriceInput = document.getElementById('targetPrice');
     const targetAmountInput = document.getElementById('targetAmount');
@@ -31,6 +34,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const trackerFormSummaryEl = document.getElementById('trackerFormSummary');
 
     const bootState = readLocalState();
+    // 사용자가 직접 삭제한 트래커 id (id -> 삭제 시각). 병합 복원 시 되살아나는 것을 막는 묘비 기록.
+    let deletedIds = readTombstones(bootState.deletedIds);
     let trackers = normalizeTrackers(bootState.trackers);
     let currentInitialQty = 0;
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
@@ -40,7 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const defaultAddTrackerBtnHtml = addTrackerBtn ? addTrackerBtn.innerHTML : '';
     let trackerFormCollapsed = trackers.length > 0;
 
-    const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
     const setAddTrackerButtonState = (isLoading) => {
         if (!addTrackerBtn) return;
         addTrackerBtn.disabled = isLoading;
@@ -73,7 +77,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hours > 0) return `${hours}시간 ${minutes}분`;
         return `${minutes}분`;
     };
-    const getDefaultPrice = (coin) => DEFAULT_PRICE_BY_COIN[coin] ?? 0.0004;
     const parseTxTime = (value) => {
         const parsed = Date.parse(String(value || '').replace(' ', 'T'));
         return Number.isNaN(parsed) ? Date.now() : parsed;
@@ -87,23 +90,82 @@ document.addEventListener('DOMContentLoaded', () => {
         const pStr = p.toFixed(4);
         return tStr === pStr;
     };
-    const baseAnalysis = () => ({ version: ANALYSIS_VERSION, source: 'tracking_only' });
-    function readLocalState() {
+    // 아래 세 함수는 부팅 시점의 normalizeTrackers() 보다 먼저 필요하므로
+    // 반드시 호이스팅되는 함수 선언이어야 한다. (const 화살표 함수로 두면 TDZ 오류가 나면서
+    // 저장된 트래커 복원이 통째로 실패한다.)
+    function clamp(v, min, max) {
+        return Math.min(Math.max(v, min), max);
+    }
+    function getDefaultPrice(coin) {
+        return DEFAULT_PRICE_BY_COIN[coin] ?? 0.0004;
+    }
+    function baseAnalysis() {
+        return { version: ANALYSIS_VERSION, source: 'tracking_only' };
+    }
+    function parseState(raw) {
+        if (Array.isArray(raw)) {
+            return { savedAt: 0, trackers: raw, deletedIds: [] };
+        }
+        if (raw && typeof raw === 'object' && Array.isArray(raw.trackers)) {
+            return {
+                savedAt: Number(raw.savedAt) || 0,
+                trackers: raw.trackers,
+                deletedIds: Array.isArray(raw.deletedIds) ? raw.deletedIds : []
+            };
+        }
+        return { savedAt: 0, trackers: [], deletedIds: [] };
+    }
+    function readLocalState(key = STORAGE_KEY) {
         try {
-            const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-            if (Array.isArray(parsed)) {
-                return { savedAt: 0, trackers: parsed };
-            }
-            if (parsed && typeof parsed === 'object' && Array.isArray(parsed.trackers)) {
-                return {
-                    savedAt: Number(parsed.savedAt) || 0,
-                    trackers: parsed.trackers
-                };
-            }
+            const stored = localStorage.getItem(key);
+            if (!stored) return { savedAt: 0, trackers: [], deletedIds: [] };
+            return parseState(JSON.parse(stored));
         } catch (error) {
             console.error('Failed to read local state', error);
         }
-        return { savedAt: 0, trackers: [] };
+        return { savedAt: 0, trackers: [], deletedIds: [] };
+    }
+    function readTombstones(raw) {
+        const map = new Map();
+        if (!Array.isArray(raw)) return map;
+        raw.forEach((entry) => {
+            if (Array.isArray(entry) && entry.length > 0) {
+                map.set(String(entry[0]), Number(entry[1]) || Date.now());
+            } else if (entry && typeof entry === 'object' && entry.id !== undefined) {
+                map.set(String(entry.id), Number(entry.at) || Date.now());
+            }
+        });
+        return map;
+    }
+    function mergeTombstones(...maps) {
+        const merged = new Map();
+        maps.forEach((map) => {
+            const entries = map instanceof Map ? map : readTombstones(map);
+            entries.forEach((at, id) => {
+                if (!merged.has(id) || merged.get(id) < at) merged.set(id, at);
+            });
+        });
+        // 오래된 묘비부터 잘라내 무한 증가 방지
+        return new Map(Array.from(merged.entries()).sort((a, b) => a[1] - b[1]).slice(-MAX_TOMBSTONES));
+    }
+    // 더 많이 진행된 쪽(누적 체결량 / 최근 관측 시각 기준)을 살린다.
+    function pickFresherTracker(a, b) {
+        if (a.accumulatedVol !== b.accumulatedVol) return a.accumulatedVol > b.accumulatedVol ? a : b;
+        if ((a.lastSeenTradeAt || 0) !== (b.lastSeenTradeAt || 0)) return (a.lastSeenTradeAt || 0) > (b.lastSeenTradeAt || 0) ? a : b;
+        return a;
+    }
+    // 여러 저장소/탭의 목록을 id 기준으로 합친다. 어느 한쪽이 비어 있어도 데이터가 사라지지 않는다.
+    function mergeTrackerLists(...lists) {
+        const byId = new Map();
+        lists.forEach((list) => {
+            normalizeTrackers(list).forEach((tracker) => {
+                const key = String(tracker.id);
+                if (deletedIds.has(key)) return;
+                const existing = byId.get(key);
+                byId.set(key, existing ? pickFresherTracker(existing, tracker) : tracker);
+            });
+        });
+        return Array.from(byId.values()).sort((a, b) => b.startTime - a.startTime);
     }
     function normalizeTrackers(rawTrackers) {
         try {
@@ -143,6 +205,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 resolve(null);
                 return;
             }
+            let settled = false;
+            const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                resolve(value);
+            };
+            // 다른 탭이 DB를 잡고 있거나 응답이 없어도 영원히 대기하지 않도록 타임아웃을 둔다.
+            const timer = setTimeout(() => {
+                console.warn('IndexedDB open timed out, falling back to localStorage');
+                finish(null);
+            }, STORAGE_OPEN_TIMEOUT_MS);
             const request = indexedDB.open(STORAGE_DB_NAME, STORAGE_DB_VERSION);
             request.onupgradeneeded = () => {
                 const db = request.result;
@@ -150,8 +223,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     db.createObjectStore(STORAGE_STORE_NAME, { keyPath: 'key' });
                 }
             };
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+            request.onblocked = () => {
+                console.warn('IndexedDB open blocked by another tab');
+                clearTimeout(timer);
+                finish(null);
+            };
+            request.onsuccess = () => {
+                clearTimeout(timer);
+                finish(request.result);
+            };
+            request.onerror = () => {
+                clearTimeout(timer);
+                if (settled) return;
+                settled = true;
+                reject(request.error);
+            };
         });
     }
     async function readIndexedState() {
@@ -197,47 +283,52 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Storage persist request failed', error);
         }
 
-        const indexedState = await readIndexedState();
+        const indexedState = parseState(await readIndexedState());
         const localState = readLocalState();
+        const backupState = readLocalState(STORAGE_BACKUP_KEY);
 
-        // 모든 소스 중 가장 최신이고 데이터가 많은 것을 선택
-        const candidates = [
-            { source: 'indexed', savedAt: Number(indexedState?.savedAt) || 0, trackers: indexedState?.trackers },
-            { source: 'local', savedAt: Number(localState.savedAt) || 0, trackers: localState.trackers },
-            { source: 'boot', savedAt: lastSavedAt, trackers }
-        ].filter(c => Array.isArray(c.trackers) && c.trackers.length > 0);
+        // 삭제 기록을 먼저 합친 뒤 목록을 병합해야 지운 트래커가 되살아나지 않는다.
+        deletedIds = mergeTombstones(deletedIds, indexedState.deletedIds, localState.deletedIds, backupState.deletedIds);
 
-        // savedAt 기준 정렬, 같으면 트래커 수가 많은 것 우선
-        candidates.sort((a, b) => {
-            if (b.savedAt !== a.savedAt) return b.savedAt - a.savedAt;
-            return b.trackers.length - a.trackers.length;
-        });
+        // 어느 한 저장소가 비어 있어도 데이터가 사라지지 않도록 모든 소스를 병합한다.
+        const before = trackers.length;
+        trackers = mergeTrackerLists(backupState.trackers, indexedState.trackers, localState.trackers, trackers);
+        lastSavedAt = Math.max(lastSavedAt, Number(indexedState.savedAt) || 0, Number(localState.savedAt) || 0);
 
-        const best = candidates[0];
-        if (best && Array.isArray(best.trackers) && best.trackers.length > 0) {
-            const normalized = normalizeTrackers(best.trackers);
-            if (normalized.length > 0) {
-                trackers = normalized;
-                lastSavedAt = best.savedAt || Date.now();
-                trackerFormCollapsed = trackers.length > 0;
-                console.log(`[hydrate] restored ${trackers.length} trackers from ${best.source} (savedAt: ${new Date(lastSavedAt).toISOString()})`);
-                renderCards();
-                saveTrackers();
-            }
-        }
+        console.log(`[hydrate] ${before} -> ${trackers.length} trackers (indexed: ${indexedState.trackers.length}, local: ${localState.trackers.length}, backup: ${backupState.trackers.length})`);
 
-        // 즉시 양쪽 저장소에 동기화
+        trackerFormCollapsed = trackers.length > 0;
+        renderCards();
+        // 병합 결과를 모든 저장소에 동기화 (비어 있으면 saveTrackers 가 알아서 건너뛴다)
         saveTrackers();
     }
-    const saveTrackers = () => {
+    /**
+     * 저장. 기본적으로 빈 목록은 저장하지 않는다.
+     * 복원(hydrate)이 끝나기 전이나, 트래커가 0개인 오래된 탭이 다른 탭/저장소의 데이터를
+     * 빈 배열로 덮어써서 영구 삭제되는 사고를 막기 위한 안전장치다.
+     * 사용자가 직접 삭제한 경우에만 allowEmpty 로 빈 저장을 허용한다.
+     */
+    const saveTrackers = ({ allowEmpty = false } = {}) => {
+        if (trackers.length === 0 && !allowEmpty) return;
+
+        // 저장 직전에 다른 탭이 써 둔 내용과 병합해, 오래된 탭이 새 트래커를 지우지 않게 한다.
+        const stored = readLocalState();
+        deletedIds = mergeTombstones(deletedIds, stored.deletedIds);
+        const previousCount = trackers.length;
+        trackers = mergeTrackerLists(stored.trackers, trackers);
+
         lastSavedAt = Date.now();
-        const payload = { savedAt: lastSavedAt, trackers };
+        const payload = { savedAt: lastSavedAt, trackers, deletedIds: Array.from(deletedIds.entries()) };
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            // 마지막으로 데이터가 있었던 시점의 스냅샷을 따로 남겨 복구 경로를 하나 더 확보한다.
+            if (trackers.length > 0) localStorage.setItem(STORAGE_BACKUP_KEY, JSON.stringify(payload));
         } catch (error) {
             console.error('Failed to save to localStorage', error);
         }
         writeIndexedState(payload).catch(err => console.error('Failed to save to IndexedDB', err));
+
+        if (trackers.length !== previousCount) renderCards();
     };
     const setError = (msg = '') => { if (errorMsgEl) errorMsgEl.innerText = msg; };
     const updateActiveCount = () => { if (activeCountEl) activeCountEl.innerText = String(trackers.length); };
@@ -573,10 +664,27 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!tracker) return;
         const confirmed = window.confirm(`${tracker.coin} ${Number(tracker.targetPrice).toFixed(4)} KRW 추적 덱을 정말 삭제할까요?\n삭제한 추적 데이터는 복구되지 않습니다.`);
         if (!confirmed) return;
-        trackers = trackers.filter((tracker) => tracker.id !== id);
-        saveTrackers();
+        trackers = trackers.filter((item) => item.id !== id);
+        // 삭제 기록을 남겨야 다른 탭/저장소에서 병합될 때 되살아나지 않는다.
+        deletedIds = mergeTombstones(deletedIds, new Map([[String(id), Date.now()]]));
+        saveTrackers({ allowEmpty: true });
         renderCards();
     };
+    // 다른 탭에서 변경된 내용을 즉시 반영 (탭 간 상태가 어긋나 서로 덮어쓰는 것을 방지)
+    window.addEventListener('storage', (event) => {
+        if (event.key !== STORAGE_KEY || !event.newValue) return;
+        try {
+            const incoming = parseState(JSON.parse(event.newValue));
+            deletedIds = mergeTombstones(deletedIds, incoming.deletedIds);
+            const merged = mergeTrackerLists(incoming.trackers, trackers);
+            if (merged.length === trackers.length && merged.every((tracker, index) => tracker.id === trackers[index].id)) return;
+            trackers = merged;
+            trackerFormCollapsed = trackers.length > 0;
+            renderCards();
+        } catch (error) {
+            console.error('Failed to sync state from another tab', error);
+        }
+    });
     radioInputTypes.forEach((radio) => radio.addEventListener('change', updateInputLabelsCompact));
     radioCoins.forEach((radio) => radio.addEventListener('change', (event) => {
         selectedCoin = event.target.value;
@@ -615,9 +723,9 @@ document.addEventListener('DOMContentLoaded', () => {
             saveTrackers();
         }
     });
-    window.addEventListener('beforeunload', saveTrackers);
-    window.addEventListener('pagehide', saveTrackers);
-    setInterval(() => { if (trackers.length > 0) saveTrackers(); }, 30000);
+    window.addEventListener('beforeunload', () => saveTrackers());
+    window.addEventListener('pagehide', () => saveTrackers());
+    setInterval(() => saveTrackers(), 30000);
     targetPriceInput.value = getDefaultPrice(selectedCoin).toFixed(4);
     updateInputLabelsCompact();
     refreshTrackerFormState();
