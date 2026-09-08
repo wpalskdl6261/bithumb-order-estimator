@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const MAX_RECENT_TRADES_PER_COIN = 60000;
     const PRICE_MATCH_TOLERANCE = 0.00005;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
+    const MAX_DAILY_BUCKETS = 180;
     const STORAGE_BACKUP_KEY = 'bithumb_trackers_v2_backup';
     const STORAGE_DB_NAME = 'bithumb-estimator-db';
     const STORAGE_DB_VERSION = 1;
@@ -39,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let trackers = normalizeTrackers(bootState.trackers);
     let currentInitialQty = 0;
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
+    // 날짜별 체결량 패널이 펼쳐진 트래커 id. 3초마다 카드가 다시 그려져도 열린 상태를 유지한다.
+    const expandedDailyIds = new Set();
     let recentTradesByCoin = {};
     let recentTradeKeys = new Set();
     let lastSavedAt = Number(bootState.savedAt) || 0;
@@ -77,6 +80,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hours > 0) return `${hours}시간 ${minutes}분`;
         return `${minutes}분`;
     };
+    const formatDayLabel = (key) => {
+        const [year, month, day] = key.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        const weekday = ['일', '월', '화', '수', '목', '금', '토'][date.getDay()];
+        const today = dateKey(Date.now());
+        const yesterday = dateKey(Date.now() - 86400000);
+        const suffix = key === today ? ' · 오늘' : (key === yesterday ? ' · 어제' : '');
+        return `${String(month).padStart(2, '0')}월 ${String(day).padStart(2, '0')}일 (${weekday})${suffix}`;
+    };
     const parseTxTime = (value) => {
         const parsed = Date.parse(String(value || '').replace(' ', 'T'));
         return Number.isNaN(parsed) ? Date.now() : parsed;
@@ -101,6 +113,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     function baseAnalysis() {
         return { version: ANALYSIS_VERSION, source: 'tracking_only' };
+    }
+    // 로컬 시간 기준 'YYYY-MM-DD'
+    function dateKey(ms) {
+        const d = new Date(ms);
+        if (Number.isNaN(d.getTime())) return dateKey(Date.now());
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    function normalizeDailyVolumes(raw) {
+        const out = {};
+        if (!raw || typeof raw !== 'object') return out;
+        Object.keys(raw)
+            .filter((key) => /^\d{4}-\d{2}-\d{2}$/.test(key))
+            .sort()
+            .slice(-MAX_DAILY_BUCKETS)
+            .forEach((key) => {
+                const value = Number(raw[key]);
+                if (Number.isFinite(value) && value > 0) out[key] = value;
+            });
+        return out;
     }
     function parseState(raw) {
         if (Array.isArray(raw)) {
@@ -190,6 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         processedTradeKeys: Array.isArray(t.processedTradeKeys) ? t.processedTradeKeys.slice(-MAX_PROCESSED_KEYS) : [],
                         lastSeenTradeAt: Number(t.lastSeenTradeAt) || startTime,
                         lastMatchedAt: Number(t.lastMatchedAt) || 0,
+                        dailyVolumes: normalizeDailyVolumes(t.dailyVolumes),
                         historicalAnalysis: baseAnalysis()
                     };
                 })
@@ -476,6 +508,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 tracker.accumulatedVol += applied;
                 tracker.remainingQty = Math.max(0, tracker.remainingQty - applied);
                 tracker.lastMatchedAt = trade.timeMs;
+                // 날짜별 체결량 누적 (체결이 일어난 날 기준). 합계는 accumulatedVol 과 일치한다.
+                const day = dateKey(trade.timeMs);
+                tracker.dailyVolumes = tracker.dailyVolumes || {};
+                tracker.dailyVolumes[day] = (tracker.dailyVolumes[day] || 0) + applied;
                 console.log(`[trade matched] ${coin} @ ${trade.price} vol=${applied} remaining=${tracker.remainingQty}`);
             });
             if (!trackerChanged) return;
@@ -516,6 +552,28 @@ document.addEventListener('DOMContentLoaded', () => {
             elapsedMinutes,
             recentWindowMinutes
         };
+    };
+    const buildDailyPanel = (tracker) => {
+        const daily = tracker.dailyVolumes || {};
+        const days = Object.keys(daily).sort().reverse();
+        const body = days.length === 0
+            ? `<p class="daily-empty">아직 기록된 체결이 없습니다. 이 목록은 날짜별 집계가 추가된 시점부터 하루씩 쌓입니다.</p>`
+            : days.map((key) => `
+                        <div class="daily-row">
+                            <span class="daily-date">${formatDayLabel(key)}</span>
+                            <span class="text-right">
+                                <span class="daily-qty">${fmtNum(daily[key])} 개</span>
+                                <span class="daily-krw">${fmtKrwValue(daily[key], tracker.targetPrice)}</span>
+                            </span>
+                        </div>`).join('');
+        return `
+                    <details class="daily-details" data-tracker-id="${tracker.id}"${expandedDailyIds.has(tracker.id) ? ' open' : ''}>
+                        <summary>
+                            <span>날짜별 체결량 보기${days.length > 0 ? ` (${days.length}일)` : ''}</span>
+                            <span class="material-icons">expand_more</span>
+                        </summary>
+                        <div class="daily-body">${body}</div>
+                    </details>`;
     };
     const legacyRenderCards = () => {
         updateActiveCount();
@@ -613,7 +671,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-2">
                         <div class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</div>
                         <div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div>
-                    </div>
+                    </div>${buildDailyPanel(tracker)}
                 </div>
             `;
         }).join('');
@@ -647,6 +705,17 @@ document.addEventListener('DOMContentLoaded', () => {
         saveTrackers({ allowEmpty: true });
         renderCards();
     };
+    // toggle 이벤트는 버블링되지 않으므로 캡처 단계에서 잡는다.
+    if (trackerListEl) {
+        trackerListEl.addEventListener('toggle', (event) => {
+            const details = event.target;
+            if (!details.classList?.contains('daily-details')) return;
+            const id = Number(details.dataset.trackerId);
+            if (!Number.isFinite(id)) return;
+            if (details.open) expandedDailyIds.add(id);
+            else expandedDailyIds.delete(id);
+        }, true);
+    }
     // 다른 탭에서 변경된 내용을 즉시 반영 (탭 간 상태가 어긋나 서로 덮어쓰는 것을 방지)
     window.addEventListener('storage', (event) => {
         if (event.key !== STORAGE_KEY || !event.newValue) return;
@@ -687,7 +756,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setAddTrackerButtonState(true);
         const startTime = Date.now();
         const trackerId = Date.now();
-        trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, historicalAnalysis: baseAnalysis() }, ...trackers];
+        trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, dailyVolumes: {}, historicalAnalysis: baseAnalysis() }, ...trackers];
         saveTrackers();
         renderCards();
         targetAmountInput.value = '';
