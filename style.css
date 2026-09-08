@@ -179,9 +179,3 @@ input[type="number"]:focus {
 .stat-box-wide .stat-pair {
     align-items: center;
 }
-.tracker-card .grid.grid-cols-3 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.tracker-card .grid.grid-cols-3 > .stat-box:first-child {
-    display: none;
-}

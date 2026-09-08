@@ -564,9 +564,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const priceLabel = Number(tracker.targetPrice).toFixed(4);
             const etaLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '데이터 수집 중' : formatFullDate(stats.etaMs));
             const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '추적 데이터 수집 중' : formatRemainingTime(stats.remainingMinutes));
-            const note = stats.pending
-                ? '덱 추가 후 체결 데이터가 더 쌓이면 누적 체결량과 최근 24시간 체결량을 함께 반영해 예상 시간을 계산합니다.'
-                : '덱 추가 후 누적 체결량과 최근 24시간 체결량을 함께 반영합니다. 추적 시간이 24시간보다 짧으면 현재까지 수집된 데이터만 사용합니다.';
 
             return `
                 <div class="tracker-card space-y-4">
@@ -595,9 +592,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="progress-bar-bg">
                             <div class="progress-bar-fill h-full" style="width:${barWidth}%"></div>
                         </div>
-                        <div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500">
-                            <span>초기 ${fmtNum(tracker.initialQty)} 개</span>
-                            <span>잔량 ${remainingRatio.toFixed(1)}%</span>
+                        <div class="mt-2 flex justify-between gap-3 text-[10px] font-semibold text-slate-500">
+                            <span>초기 ${fmtNum(tracker.initialQty)} 개 <span class="stat-accent">(${fmtKrwValue(tracker.initialQty, tracker.targetPrice)})</span></span>
+                            <span class="text-right">잔량 ${remainingRatio.toFixed(1)}% <span class="stat-accent">(${fmtKrwValue(tracker.remainingQty, tracker.targetPrice)})</span></span>
                         </div>
                     </div>
                     <div class="stat-box stat-box-wide">
@@ -613,32 +610,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>
                         </div>
                     </div>
-                    <div class="grid grid-cols-3 gap-2">
-                        <div class="stat-box">
-                            <div class="text-[9px] font-bold text-slate-500 uppercase">추적 누적 체결량</div>
-                            <div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="text-[9px] font-bold text-slate-500 uppercase">최근 24시간 속도</div>
-                            <div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="text-[9px] font-bold text-slate-500 uppercase">덱 추가 후 평균 속도</div>
-                            <div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</div>
-                        </div>
-                    </div>
-                    <div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3">
-                        <div class="flex items-center justify-between gap-2 flex-wrap">
-                            <span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span>
-                            <span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">누적 + 최근 24시간 기준</span>
-                        </div>
+                    <div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-2">
+                        <div class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</div>
                         <div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div>
-                        <div class="flex flex-wrap gap-2">
-                            <span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span>
-                            <span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">최근 24시간 속도 ${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</span>
-                            <span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">예상 기준 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span>
-                        </div>
-                        <p class="text-[11px] text-slate-400 leading-relaxed">${note}</p>
                     </div>
                 </div>
             `;
