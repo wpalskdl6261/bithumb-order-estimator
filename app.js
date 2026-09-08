@@ -585,9 +585,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         </button>
                     </div>
                     <div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5">
-                        <div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2">
+                        <div class="flex justify-between items-start gap-3 text-[11px] font-bold text-slate-400 mb-2">
                             <span>현재 남아 있는 수량</span>
-                            <span class="text-white">${fmtNum(tracker.remainingQty)} 개</span>
+                            <span class="text-right leading-tight">
+                                <span class="text-white">${fmtNum(tracker.remainingQty)} 개</span>
+                                <span class="block stat-accent mt-0.5">${fmtKrwValue(tracker.remainingQty, tracker.targetPrice)}</span>
+                            </span>
                         </div>
                         <div class="progress-bar-bg">
                             <div class="progress-bar-fill h-full" style="width:${barWidth}%"></div>
