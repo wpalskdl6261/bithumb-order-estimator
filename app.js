@@ -1,12 +1,15 @@
 document.addEventListener('DOMContentLoaded', () => {
     const STORAGE_KEY = 'bithumb_trackers_v2';
     const ANALYSIS_VERSION = 2;
-    const LIVE_WINDOW_MS = 24 * 60 * 60 * 1000;
-    const TREND_WINDOW_MINUTES = 24 * 60;
     const MIN_TRACKING_MINUTES = 5;
+    // 속도 추정 파라미터
+    const EWMA_HALF_LIFE_MINUTES = 6 * 60;   // 단기 속도의 반감기
+    const ADAPTIVE_DRIFT_FULL = 0.5;         // 장기/단기 괴리가 이 값 이상이면 단기로 완전 전환
+    const RANGE_WIDEN = 1.25;                // 범위 확장 계수 (시뮬레이션상 적중률 최적)
+    const MIN_MATCHED_TRADES = 20;           // 워밍업: 최소 매칭 체결 건수
+    const MIN_FILLED_RATIO = 0.01;           // 워밍업: 또는 초기 물량의 1% 체결
     const POLL_INTERVAL_MS = 3000;
     const MAX_PROCESSED_KEYS = 240;
-    const MAX_RECENT_TRADES_PER_COIN = 60000;
     const PRICE_MATCH_TOLERANCE = 0.00005;
     const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
     const MAX_DAILY_BUCKETS = 180;
@@ -42,8 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
     // 날짜별 체결량 패널이 펼쳐진 트래커 id. 3초마다 카드가 다시 그려져도 열린 상태를 유지한다.
     const expandedDailyIds = new Set();
-    let recentTradesByCoin = {};
-    let recentTradeKeys = new Set();
     let lastSavedAt = Number(bootState.savedAt) || 0;
     const defaultAddTrackerBtnHtml = addTrackerBtn ? addTrackerBtn.innerHTML : '';
     let trackerFormCollapsed = trackers.length > 0;
@@ -63,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return safe.toLocaleString('ko-KR', { maximumFractionDigits: 6 });
     };
     const fmtKrwValue = (qty, price) => `${Math.max(0, Math.round((Number(qty) || 0) * (Number(price) || 0))).toLocaleString('ko-KR')}원`;
-    const fmtKrwRate = (speedPerMin, price) => `${Math.max(0, Math.round((Number(speedPerMin) || 0) * (Number(price) || 0) * 60)).toLocaleString('ko-KR')}원/시간`;
     const formatFullDate = (ms) => {
         const d = new Date(ms);
         if (!Number.isFinite(ms) || Number.isNaN(d.getTime())) return '-';
@@ -188,6 +188,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function pickFresherTracker(a, b) {
         if (a.accumulatedVol !== b.accumulatedVol) return a.accumulatedVol > b.accumulatedVol ? a : b;
         if ((a.lastSeenTradeAt || 0) !== (b.lastSeenTradeAt || 0)) return (a.lastSeenTradeAt || 0) > (b.lastSeenTradeAt || 0) ? a : b;
+        // 체결이 없는 구간에도 EWMA 는 계속 전진하므로, 더 최근까지 갱신된 쪽을 살린다.
+        if ((a.speedEwmaAt || 0) !== (b.speedEwmaAt || 0)) return (a.speedEwmaAt || 0) > (b.speedEwmaAt || 0) ? a : b;
         return a;
     }
     // 여러 저장소/탭의 목록을 id 기준으로 합친다. 어느 한쪽이 비어 있어도 데이터가 사라지지 않는다.
@@ -227,6 +229,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         lastSeenTradeAt: Number(t.lastSeenTradeAt) || startTime,
                         lastMatchedAt: Number(t.lastMatchedAt) || 0,
                         dailyVolumes: normalizeDailyVolumes(t.dailyVolumes),
+                        matchedTrades: Math.max(0, Number(t.matchedTrades) || 0),
+                        speedEwma: Math.max(0, Number(t.speedEwma) || 0),
+                        speedEwmaAt: Number(t.speedEwmaAt) || startTime,
+                        pendingVol: Math.max(0, Number(t.pendingVol) || 0),
                         historicalAnalysis: baseAnalysis()
                     };
                 })
@@ -477,21 +483,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return { key: `${baseKey}_${counts[baseKey]}`, timeMs: parseTxTime(trade.transaction_date), price: Number(trade.price), volume: Number(trade.units_traded), type: trade.type };
         }).filter((trade) => Number.isFinite(trade.price) && Number.isFinite(trade.volume)).sort((a, b) => a.timeMs - b.timeMs);
     };
-    const pushRecentTrades = (coin, trades) => {
-        recentTradesByCoin[coin] = recentTradesByCoin[coin] || [];
-        trades.forEach((trade) => {
-            if (recentTradeKeys.has(trade.key)) return;
-            recentTradeKeys.add(trade.key);
-            recentTradesByCoin[coin].push(trade);
-        });
-        const cutoff = Date.now() - LIVE_WINDOW_MS;
-        recentTradesByCoin[coin] = recentTradesByCoin[coin].filter((trade) => trade.timeMs >= cutoff).slice(-MAX_RECENT_TRADES_PER_COIN);
-        if (recentTradeKeys.size > MAX_RECENT_TRADES_PER_COIN * 6) {
-            const nextKeys = new Set();
-            Object.values(recentTradesByCoin).forEach((list) => list.forEach((trade) => nextKeys.add(trade.key)));
-            recentTradeKeys = nextKeys;
-        }
-    };
     const applyTrades = (coin, trades) => {
         let changed = false;
         trackers.filter((tracker) => tracker.coin === coin).forEach((tracker) => {
@@ -513,6 +504,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 tracker.accumulatedVol += applied;
                 tracker.remainingQty = Math.max(0, tracker.remainingQty - applied);
                 tracker.lastMatchedAt = trade.timeMs;
+                tracker.matchedTrades = (Number(tracker.matchedTrades) || 0) + 1;
+                // 다음 EWMA 스텝에서 반영할 구간 체결량
+                tracker.pendingVol = (Number(tracker.pendingVol) || 0) + applied;
                 // 날짜별 체결량 누적 (체결이 일어난 날 기준). 합계는 accumulatedVol 과 일치한다.
                 const day = dateKey(trade.timeMs);
                 tracker.dailyVolumes = tracker.dailyVolumes || {};
@@ -525,37 +519,90 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         return changed;
     };
+    /**
+     * 단기 속도(EWMA)를 시간축으로 한 스텝 전진시킨다.
+     * 체결이 없던 구간도 0으로 반영해야 조용한 시간대에 속도가 제대로 감쇠한다.
+     * 상태는 값 하나 + 갱신 시각뿐이라 저장/복원이 되고, 새로고침해도 리셋되지 않는다.
+     */
+    const stepSpeedState = (tracker, now) => {
+        const last = Number(tracker.speedEwmaAt) || tracker.startTime;
+        const dtMin = (now - last) / 60000;
+        if (!(dtMin > 0)) return;
+        const volume = Math.max(0, Number(tracker.pendingVol) || 0);
+        tracker.pendingVol = 0;
+        tracker.speedEwmaAt = now;
+
+        const observed = volume / dtMin;
+        const tau = EWMA_HALF_LIFE_MINUTES / Math.LN2;
+        const alpha = 1 - Math.exp(-dtMin / tau);
+        const prev = Number(tracker.speedEwma) || 0;
+        if (prev > 0) {
+            tracker.speedEwma = (alpha * observed) + ((1 - alpha) * prev);
+            return;
+        }
+        // 첫 시드는 누적평균으로 잡는다 (한 번의 체결로 속도가 폭주하는 것을 막는다)
+        const elapsed = Math.max((now - tracker.startTime) / 60000, 1 / 6);
+        const longRun = tracker.accumulatedVol / elapsed;
+        tracker.speedEwma = longRun > 0 ? longRun : observed;
+    };
+    // 저장된 날짜별 체결량에서 뽑아낸, 서로 다른 시간 규모의 속도들 (범위 산출용)
+    const dailySpeeds = (tracker, now) => {
+        const daily = tracker.dailyVolumes || {};
+        const out = [];
+        const yesterday = daily[dateKey(now - 86400000)];
+        if (yesterday > 0) out.push(yesterday / 1440);
+        const today = daily[dateKey(now)];
+        if (today > 0) {
+            const d = new Date(now);
+            const minutesToday = (d.getHours() * 60) + d.getMinutes();
+            // 자정 직후엔 표본 구간이 너무 짧아 극단값이 나오므로 3시간이 지난 뒤에만 쓴다.
+            if (minutesToday >= 180) out.push(today / minutesToday);
+        }
+        return out;
+    };
     const estimate = (tracker, now) => {
         const elapsedMinutes = Math.max((now - tracker.startTime) / 60000, 1 / 6);
-        const recentWindowMinutes = Math.max(Math.min(elapsedMinutes, TREND_WINDOW_MINUTES), 1 / 6);
-        const recentFrom = now - (recentWindowMinutes * 60000);
-        const matchedRecentTrades = (recentTradesByCoin[tracker.coin] || []).filter((trade) => trade.timeMs >= recentFrom && trade.timeMs >= tracker.startTime && priceMatch(tracker.targetPrice, trade.price));
-        const recentVolume = matchedRecentTrades.reduce((sum, trade) => sum + trade.volume, 0);
-        const liveSpeed = recentVolume / recentWindowMinutes;
-        const observedSpeed = tracker.accumulatedVol / elapsedMinutes;
-        const hasRecentTrend = recentVolume > 0;
-        const hasAverageTrend = tracker.accumulatedVol > 0;
-        let composite = 0;
+        const observedSpeed = tracker.accumulatedVol / elapsedMinutes;      // 장기(누적) 속도 — 분산 최소
+        const shortSpeed = Math.max(0, Number(tracker.speedEwma) || 0);     // 단기 EWMA — 편향 최소
 
-        if (hasRecentTrend && hasAverageTrend) {
-            composite = (observedSpeed * 0.6) + (liveSpeed * 0.4);
-        } else if (hasAverageTrend) {
-            composite = observedSpeed;
-        } else if (hasRecentTrend) {
-            composite = liveSpeed;
+        // 적응형: 평소엔 장기 속도를 쓰고, 최근 속도가 장기에서 크게 벗어나면 단기로 옮겨간다.
+        let composite;
+        if (observedSpeed > 0 && shortSpeed > 0) {
+            const drift = Math.abs(shortSpeed - observedSpeed) / observedSpeed;
+            const w = Math.min(1, drift / ADAPTIVE_DRIFT_FULL);
+            composite = (observedSpeed * (1 - w)) + (shortSpeed * w);
+        } else {
+            composite = observedSpeed > 0 ? observedSpeed : shortSpeed;
         }
 
-        const pending = elapsedMinutes < MIN_TRACKING_MINUTES || composite <= 0;
-        const remainingMinutes = tracker.remainingQty <= 0 ? 0 : tracker.remainingQty / composite;
+        // 워밍업: 시간이 아니라 데이터가 충분히 쌓였는지로 판단한다.
+        const matchedTrades = Number(tracker.matchedTrades) || 0;
+        const filledRatio = tracker.initialQty > 0 ? tracker.accumulatedVol / tracker.initialQty : 0;
+        const enoughData = matchedTrades >= MIN_MATCHED_TRADES || filledRatio >= MIN_FILLED_RATIO;
+        const pending = elapsedMinutes < MIN_TRACKING_MINUTES || !enoughData || composite <= 0;
+
+        // 서로 다른 시간 규모의 속도 후보들로 범위를 만든다.
+        const candidates = [observedSpeed, shortSpeed, ...dailySpeeds(tracker, now)].filter((s) => s > 0);
+        const fastest = candidates.length ? Math.max(...candidates) * RANGE_WIDEN : 0;
+        const slowest = candidates.length ? Math.min(...candidates) / RANGE_WIDEN : 0;
+
+        const remainingMinutes = tracker.remainingQty <= 0 || composite <= 0 ? 0 : tracker.remainingQty / composite;
+        const bestMinutes = tracker.remainingQty > 0 && fastest > 0 ? tracker.remainingQty / fastest : 0;
+        const worstMinutes = tracker.remainingQty > 0 && slowest > 0 ? tracker.remainingQty / slowest : 0;
+        const hasRange = !pending && tracker.remainingQty > 0 && worstMinutes > bestMinutes && candidates.length > 1;
+
         return {
-            liveSpeed,
             observedSpeed,
+            shortSpeed,
             composite,
             pending,
+            matchedTrades,
             remainingMinutes,
+            bestMinutes,
+            worstMinutes,
+            hasRange,
             etaMs: tracker.remainingQty <= 0 || pending ? now : now + (remainingMinutes * 60000),
-            elapsedMinutes,
-            recentWindowMinutes
+            elapsedMinutes
         };
     };
     const buildDailyPanel = (tracker) => {
@@ -654,6 +701,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="eta-panel${isDone ? ' is-done' : ''}">
                         <span class="eta-label">예상 체결까지</span>
                         <span class="eta-value">${remainLabel}</span>
+                        ${stats.hasRange ? `<span class="eta-range"><span class="eta-range-key">범위</span>${formatRemainingTime(stats.bestMinutes)} ~ ${formatRemainingTime(stats.worstMinutes)}</span>` : ''}
                     </div>${buildDailyPanel(tracker)}
                 </div>
             `;
@@ -668,12 +716,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 const json = await response.json();
                 if (json.status !== '0000' || !Array.isArray(json.data)) continue;
                 const trades = buildTrades(coin, json.data);
-                pushRecentTrades(coin, trades);
                 if (applyTrades(coin, trades)) changed = true;
             } catch (error) {
                 console.error(`poll failed: ${coin}`, error);
             }
         }
+        // 체결이 없던 폴링도 EWMA 를 전진시켜야 조용한 구간에서 속도가 감쇠한다.
+        const now = Date.now();
+        trackers.forEach((tracker) => stepSpeedState(tracker, now));
         if (changed) saveTrackers();
         renderCards();
     };
@@ -739,7 +789,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setAddTrackerButtonState(true);
         const startTime = Date.now();
         const trackerId = Date.now();
-        trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, dailyVolumes: {}, historicalAnalysis: baseAnalysis() }, ...trackers];
+        trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, dailyVolumes: {}, matchedTrades: 0, speedEwma: 0, speedEwmaAt: startTime, pendingVol: 0, historicalAnalysis: baseAnalysis() }, ...trackers];
         saveTrackers();
         renderCards();
         targetAmountInput.value = '';

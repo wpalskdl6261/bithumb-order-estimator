@@ -314,6 +314,18 @@ input[type="number"]:focus {
 .eta-panel.is-done .eta-value {
     color: #34d399;
 }
+.eta-range {
+    margin-top: 2px;
+    color: #cbd5e1;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.eta-range-key {
+    margin-right: 6px;
+    color: #64748b;
+    font-weight: 700;
+}
 
 /* 날짜별 체결량 */
 .daily-details {
