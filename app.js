@@ -80,6 +80,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hours > 0) return `${hours}시간 ${minutes}분`;
         return `${minutes}분`;
     };
+    const formatShortDate = (ms) => {
+        const d = new Date(ms);
+        if (!Number.isFinite(ms) || Number.isNaN(d.getTime())) return '-';
+        return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
     const formatDayLabel = (key) => {
         const [year, month, day] = key.split('-').map(Number);
         const date = new Date(year, month - 1, day);
@@ -557,43 +562,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const daily = tracker.dailyVolumes || {};
         const days = Object.keys(daily).sort().reverse();
         const body = days.length === 0
-            ? `<p class="daily-empty">아직 기록된 체결이 없습니다. 이 목록은 날짜별 집계가 추가된 시점부터 하루씩 쌓입니다.</p>`
+            ? `<p class="daily-empty">아직 기록된 체결이 없습니다.<br>날짜별 집계는 오늘부터 하루씩 쌓입니다.</p>`
             : days.map((key) => `
                         <div class="daily-row">
                             <span class="daily-date">${formatDayLabel(key)}</span>
-                            <span class="text-right">
-                                <span class="daily-qty">${fmtNum(daily[key])} 개</span>
-                                <span class="daily-krw">${fmtKrwValue(daily[key], tracker.targetPrice)}</span>
+                            <span class="metric-value">
+                                <span class="metric-num sm">${fmtNum(daily[key])} 개</span>
+                                <span class="metric-krw">${fmtKrwValue(daily[key], tracker.targetPrice)}</span>
                             </span>
                         </div>`).join('');
         return `
                     <details class="daily-details" data-tracker-id="${tracker.id}"${expandedDailyIds.has(tracker.id) ? ' open' : ''}>
                         <summary>
-                            <span>날짜별 체결량 보기${days.length > 0 ? ` (${days.length}일)` : ''}</span>
+                            <span class="daily-summary-text">날짜별 체결량${days.length > 0 ? `<span class="daily-count">${days.length}일</span>` : ''}</span>
                             <span class="material-icons">expand_more</span>
                         </summary>
                         <div class="daily-body">${body}</div>
                     </details>`;
-    };
-    const legacyRenderCards = () => {
-        updateActiveCount();
-        if (trackers.length === 0) {
-            trackerListEl.innerHTML = `<div class="border-2 border-dashed border-white/5 rounded-3xl p-12 text-center"><div class="w-16 h-16 bg-[#181c23] rounded-2xl flex items-center justify-center mx-auto mb-6"><span class="material-icons text-slate-600 text-3xl">hourglass_empty</span></div><h4 class="text-white font-bold text-xl mb-2">진행 중인 추적이 없습니다</h4><p class="text-slate-500 text-sm leading-relaxed px-4">시작하려면 상단 양식에서 코인과 물량을 입력하여 추적을 시작하세요.</p></div>`;
-            return;
-        }
-        const now = Date.now();
-        trackerListEl.innerHTML = trackers.map((tracker) => {
-            const stats = estimate(tracker, now);
-            const remainingRatio = tracker.initialQty > 0 ? clamp((tracker.remainingQty / tracker.initialQty) * 100, 0, 100) : 0;
-            const barWidth = tracker.remainingQty > 0 ? clamp(Math.max(remainingRatio, 4), 4, 100) : 0;
-            const priceLabel = Number(tracker.targetPrice).toFixed(4);
-            const etaLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '실시간 데이터 수집 중' : formatFullDate(stats.etaMs));
-            const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '추적 데이터 수집 중' : formatRemainingTime(stats.remainingMinutes));
-            const note = stats.pending
-                ? '덱 추가 후 체결 데이터를 더 쌓는 중입니다. 실제 체결이 누적되면 최근 속도와 평균 속도를 함께 반영해 예상 시간을 계산합니다.'
-                : `덱 추가 후 ${formatRemainingTime(stats.elapsedMinutes)} 동안 누적된 속도와 최근 ${formatRemainingTime(stats.recentWindowMinutes)} 경향을 함께 반영했습니다.`;
-            return `<div class="tracker-card space-y-4"><div class="flex justify-between gap-4 items-start"><div class="space-y-2"><div class="text-white font-bold text-lg">${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span></div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span><span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span></div></div><button onclick="removeTracker(${tracker.id})" class="text-slate-600 hover:text-red-500 transition-colors"><span class="material-icons text-xl">delete_outline</span></button></div><div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5"><div class="flex justify-between text-[11px] font-bold text-slate-400 mb-2"><span>현재 내 앞 잔여 물량</span><span class="text-white">${fmtNum(tracker.remainingQty)} 개</span></div><div class="progress-bar-bg"><div class="progress-bar-fill h-full" style="width:${barWidth}%"></div></div><div class="mt-2 flex justify-between text-[10px] font-semibold text-slate-500"><span>초기 ${fmtNum(tracker.initialQty)} 개</span><span>잔여 ${remainingRatio.toFixed(1)}%</span></div></div><div class="grid grid-cols-3 gap-2"><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">누적 차감 물량</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtNum(tracker.accumulatedVol)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">최근 체결 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</div></div><div class="stat-box"><div class="text-[9px] font-bold text-slate-500 uppercase">추적 후 평균 속도</div><div class="text-white font-mono text-sm font-bold mt-1">${fmtKrwRate(stats.observedSpeed, tracker.targetPrice)}</div></div></div><div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-3"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</span><span class="text-[10px] text-slate-400 font-bold px-2 py-1 rounded-full bg-[#0b0f15] border border-white/5">덱 추가 후 경향 기반</span></div><div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div><div class="flex flex-wrap gap-2"><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">완료 예상 ${etaLabel}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">최근 속도 ${fmtKrwRate(stats.liveSpeed, tracker.targetPrice)}</span><span class="text-[11px] text-slate-300 font-semibold px-3 py-2 rounded-full bg-[#0b0f15] border border-white/5">예상 기준 속도 ${fmtKrwRate(stats.composite, tracker.targetPrice)}</span></div><p class="text-[11px] text-slate-400 leading-relaxed">${note}</p></div></div>`;
-        }).join('');
     };
     const renderCards = () => {
         if (trackers.length === 0 && trackerFormCollapsed) {
@@ -620,57 +605,55 @@ document.addEventListener('DOMContentLoaded', () => {
             const remainingRatio = tracker.initialQty > 0 ? clamp((tracker.remainingQty / tracker.initialQty) * 100, 0, 100) : 0;
             const barWidth = tracker.remainingQty > 0 ? clamp(Math.max(remainingRatio, 4), 4, 100) : 0;
             const priceLabel = Number(tracker.targetPrice).toFixed(4);
-            const etaLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '데이터 수집 중' : formatFullDate(stats.etaMs));
-            const remainLabel = tracker.remainingQty <= 0 ? '체결 완료' : (stats.pending ? '추적 데이터 수집 중' : formatRemainingTime(stats.remainingMinutes));
+            const isDone = tracker.remainingQty <= 0;
+            const etaLabel = isDone ? '체결 완료' : (stats.pending ? '수집 중' : formatShortDate(stats.etaMs));
+            const remainLabel = isDone ? '체결 완료' : (stats.pending ? '추적 데이터 수집 중' : formatRemainingTime(stats.remainingMinutes));
 
             return `
-                <div class="tracker-card space-y-4">
-                    <div class="flex justify-between gap-4 items-start">
-                        <div class="space-y-2">
-                            <div class="text-white font-bold text-lg">
-                                ${tracker.coin}<span class="text-[#f37321] text-sm ml-2">${priceLabel} KRW</span>
+                <div class="tracker-card">
+                    <div class="tracker-head">
+                        <div class="tracker-ident">
+                            <div class="tracker-symbol">
+                                ${tracker.coin}<span class="tracker-price">${priceLabel} KRW</span>
                             </div>
-                            <div class="flex flex-wrap gap-2">
-                                <span class="text-[11px] text-slate-400 font-bold px-3 py-1.5 rounded-full border border-white/5 bg-[#0b0f15]">시작 ${formatFullDate(tracker.startTime)}</span>
-                                <span class="text-[11px] text-[#f37321] font-bold px-3 py-1.5 rounded-full border border-[#f37321]/20 bg-[#f37321]/10">예상 ${etaLabel}</span>
+                            <div class="tracker-meta">
+                                <span><span class="tracker-meta-key">시작</span>${formatShortDate(tracker.startTime)}</span>
+                                <span class="tracker-meta-dot"></span>
+                                <span><span class="tracker-meta-key">완료 예상</span><span class="tracker-meta-eta">${etaLabel}</span></span>
                             </div>
                         </div>
                         <button type="button" onclick="removeTracker(${tracker.id})" class="tracker-delete-btn" aria-label="${tracker.coin} 추적 삭제">
                             <span class="material-icons text-[20px]">delete_outline</span>
                         </button>
                     </div>
-                    <div class="bg-[#0b0f15] rounded-2xl p-4 border border-white/5">
-                        <div class="flex justify-between items-start gap-3 text-[11px] font-bold text-slate-400 mb-2">
-                            <span>현재 남아 있는 수량</span>
-                            <span class="text-right leading-tight">
-                                <span class="text-white">${fmtNum(tracker.remainingQty)} 개</span>
-                                <span class="block stat-accent mt-0.5">${fmtKrwValue(tracker.remainingQty, tracker.targetPrice)}</span>
+                    <div class="card-panel">
+                        <div class="metric-row">
+                            <span class="metric-label">남은 수량<span class="metric-chip">잔량 ${remainingRatio.toFixed(1)}%</span></span>
+                            <span class="metric-value">
+                                <span class="metric-num">${fmtNum(tracker.remainingQty)} 개</span>
+                                <span class="metric-krw">${fmtKrwValue(tracker.remainingQty, tracker.targetPrice)}</span>
                             </span>
                         </div>
                         <div class="progress-bar-bg">
                             <div class="progress-bar-fill h-full" style="width:${barWidth}%"></div>
                         </div>
-                        <div class="mt-2 flex justify-between gap-3 text-[10px] font-semibold text-slate-500">
-                            <span>초기 ${fmtNum(tracker.initialQty)} 개 <span class="stat-accent">(${fmtKrwValue(tracker.initialQty, tracker.targetPrice)})</span></span>
-                            <span class="text-right">잔량 ${remainingRatio.toFixed(1)}% <span class="stat-accent">(${fmtKrwValue(tracker.remainingQty, tracker.targetPrice)})</span></span>
+                        <div class="metric-foot">
+                            <span class="metric-foot-key">초기 ${fmtNum(tracker.initialQty)} 개</span>
+                            <span class="metric-foot-krw">${fmtKrwValue(tracker.initialQty, tracker.targetPrice)}</span>
                         </div>
                     </div>
-                    <div class="stat-box stat-box-wide">
-                        <div class="text-[10px] font-bold text-slate-500 uppercase">누적 차감 물량</div>
-                        <div class="stat-pair mt-2">
-                            <div>
-                                <div class="stat-value">${fmtNum(tracker.accumulatedVol)} 개</div>
-                                <div class="stat-value-sub">코인 수량</div>
-                            </div>
-                            <div class="text-right">
-                                <div class="stat-value stat-accent">${fmtKrwValue(tracker.accumulatedVol, tracker.targetPrice)}</div>
-                                <div class="stat-value-sub">환산 (원)</div>
-                            </div>
+                    <div class="card-panel">
+                        <div class="metric-row">
+                            <span class="metric-label">누적 차감 물량</span>
+                            <span class="metric-value">
+                                <span class="metric-num">${fmtNum(tracker.accumulatedVol)} 개</span>
+                                <span class="metric-krw">${fmtKrwValue(tracker.accumulatedVol, tracker.targetPrice)}</span>
+                            </span>
                         </div>
                     </div>
-                    <div class="rounded-2xl border border-[#f37321]/20 bg-[#f37321]/8 p-4 space-y-2">
-                        <div class="text-[#f37321] text-[11px] font-black uppercase tracking-[0.24em]">예상 체결까지</div>
-                        <div class="text-white font-extrabold text-xl leading-tight">${remainLabel}</div>
+                    <div class="eta-panel${isDone ? ' is-done' : ''}">
+                        <span class="eta-label">예상 체결까지</span>
+                        <span class="eta-value">${remainLabel}</span>
                     </div>${buildDailyPanel(tracker)}
                 </div>
             `;

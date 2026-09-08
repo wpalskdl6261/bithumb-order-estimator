@@ -86,6 +86,9 @@ body {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    /* 아이콘 폰트가 늦게 뜨거나 차단되면 리거처 원문("delete_outline")이
+       카드 밖으로 흘러나오므로 버튼 안에 가둔다. */
+    overflow: hidden;
     border-radius: 14px;
     border: 1px solid rgba(255, 255, 255, 0.06);
     background: rgba(11, 15, 21, 0.82);
@@ -126,63 +129,197 @@ input[type="number"]:focus {
     color: #f37321;
 }
 
-/* Tracker Card Styling */
+/* ── Tracker Card ───────────────────────────────────────────── */
 .tracker-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     background: rgba(24, 28, 35, 0.8);
     backdrop-filter: blur(12px);
     border: 1px solid rgba(243, 115, 33, 0.1);
     border-radius: 24px;
-    padding: 20px;
+    padding: 18px;
+}
+
+/* 헤더: 심볼 + 가격, 그 아래 한 줄 메타 */
+.tracker-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+.tracker-ident {
+    min-width: 0;
+}
+.tracker-symbol {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: #ffffff;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+.tracker-price {
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(243, 115, 33, 0.22);
+    background: rgba(243, 115, 33, 0.1);
+    color: #f8b06b;
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+}
+.tracker-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 7px;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.tracker-meta-key {
+    margin-right: 5px;
+    color: #64748b;
+    font-weight: 700;
+}
+.tracker-meta-eta {
+    color: #f8b06b;
+    font-weight: 700;
+}
+.tracker-meta-dot {
+    width: 3px;
+    height: 3px;
+    border-radius: 999px;
+    background: #475569;
+}
+
+/* 카드 안의 지표 패널 — 모든 수치가 같은 규칙을 따른다 */
+.card-panel {
+    padding: 14px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(255,255,255,0.05);
+    background: #0b0f15;
+}
+.metric-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+}
+.metric-label {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding-top: 2px;
+    color: #94a3b8;
+    font-size: 11.5px;
+    font-weight: 700;
+}
+.metric-chip {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.03);
+    color: #cbd5e1;
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.metric-value {
+    display: block;
+    text-align: right;
+    white-space: nowrap;
+}
+.metric-num {
+    display: block;
+    color: #ffffff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+.metric-num.sm {
+    font-size: 13px;
+}
+.metric-krw {
+    display: block;
+    margin-top: 3px;
+    color: #f8b06b;
+    font-size: 11.5px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+.metric-foot {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.metric-foot-key {
+    color: #64748b;
+}
+.metric-foot-krw {
+    color: #94a3b8;
+    font-weight: 700;
 }
 .progress-bar-bg {
-    background: #0b0f15;
-    height: 14px;
+    background: #060a0f;
+    height: 10px;
+    margin-top: 12px;
     border-radius: 100px;
     overflow: hidden;
     border: 1px solid rgba(255,255,255,0.05);
 }
-.stat-box {
-    background: #0b0f15;
-    padding: 12px;
-    border-radius: 16px;
-    border: 1px solid rgba(255,255,255,0.03);
-}
-.stat-box-wide {
-    grid-column: 1 / -1;
-}
-.stat-pair {
+
+/* 예상 체결까지 */
+.eta-panel {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 6px;
+    padding: 15px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(243, 115, 33, 0.22);
+    background: linear-gradient(135deg, rgba(243, 115, 33, 0.14) 0%, rgba(243, 115, 33, 0.05) 100%);
 }
-.stat-value {
-    color: #ffffff;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    font-size: 1rem;
-    font-weight: 700;
-    line-height: 1.2;
-}
-.stat-value-sub {
-    margin-top: 4px;
-    color: #94a3b8;
-    font-size: 11px;
-    font-weight: 600;
-}
-.stat-accent {
+.eta-label {
     color: #f8b06b;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
 }
-.stat-box-wide .stat-value-sub {
-    display: none;
+.eta-value {
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
 }
-.stat-box-wide .stat-pair {
-    align-items: center;
+.eta-panel.is-done .eta-value {
+    color: #34d399;
 }
+
+/* 날짜별 체결량 */
 .daily-details {
-    background: #0b0f15;
+    border-radius: 18px;
     border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 16px;
+    background: #0b0f15;
     overflow: hidden;
 }
 .daily-details > summary {
@@ -190,18 +327,41 @@ input[type="number"]:focus {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 12px 14px;
+    padding: 13px 16px;
     cursor: pointer;
     list-style: none;
     color: #cbd5e1;
-    font-size: 12px;
+    font-size: 11.5px;
     font-weight: 700;
     user-select: none;
+    transition: color 0.2s ease, background-color 0.2s ease;
+}
+.daily-details > summary:hover {
+    color: #f8b06b;
+    background: rgba(243, 115, 33, 0.04);
 }
 .daily-details > summary::-webkit-details-marker {
     display: none;
 }
+.daily-summary-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.daily-count {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.03);
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
 .daily-details > summary .material-icons {
+    flex: 0 0 18px;
+    width: 18px;
+    overflow: hidden;
     font-size: 18px;
     color: #64748b;
     transition: transform 0.2s ease;
@@ -210,41 +370,30 @@ input[type="number"]:focus {
     transform: rotate(180deg);
 }
 .daily-body {
-    padding: 0 14px 10px;
-    max-height: 260px;
+    padding: 0 16px 12px;
+    max-height: 272px;
     overflow-y: auto;
+    overscroll-behavior: contain;
 }
 .daily-row {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 0;
+    padding: 9px 0;
     border-top: 1px solid rgba(255,255,255,0.05);
 }
 .daily-date {
     color: #94a3b8;
     font-size: 11px;
     font-weight: 600;
-}
-.daily-qty {
-    display: block;
-    color: #ffffff;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    font-size: 12px;
-    font-weight: 700;
-}
-.daily-krw {
-    display: block;
-    margin-top: 2px;
-    color: #f8b06b;
-    font-size: 11px;
-    font-weight: 700;
+    font-variant-numeric: tabular-nums;
 }
 .daily-empty {
-    padding: 8px 0 2px;
+    margin: 0;
+    padding: 12px 0 4px;
     color: #64748b;
     font-size: 11px;
-    line-height: 1.6;
+    line-height: 1.7;
     border-top: 1px solid rgba(255,255,255,0.05);
 }
