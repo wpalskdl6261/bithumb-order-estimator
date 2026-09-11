@@ -45,6 +45,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
     // 날짜별 체결량 패널이 펼쳐진 트래커 id. 3초마다 카드가 다시 그려져도 열린 상태를 유지한다.
     const expandedDailyIds = new Set();
+    // 수량 수정 중인 트래커 id 와 입력 단위. 수정 중에는 자동 재렌더링을 멈춰
+    // 입력하던 값과 커서가 3초마다 날아가지 않게 한다.
+    let editingTrackerId = null;
+    let editingUnit = 'KRW';
     let lastSavedAt = Number(bootState.savedAt) || 0;
     const defaultAddTrackerBtnHtml = addTrackerBtn ? addTrackerBtn.innerHTML : '';
     let trackerFormCollapsed = trackers.length > 0;
@@ -186,6 +190,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     // 더 많이 진행된 쪽(누적 체결량 / 최근 관측 시각 기준)을 살린다.
     function pickFresherTracker(a, b) {
+        // 사용자가 직접 고친 쪽이 항상 우선한다. 수동 수정은 명시적 의사표시이므로
+        // 다른 탭의 오래된 사본이 이를 덮어쓰면 안 된다.
+        const editA = Number(a.manualEditAt) || 0;
+        const editB = Number(b.manualEditAt) || 0;
+        if (editA !== editB) return editA > editB ? a : b;
         if (a.accumulatedVol !== b.accumulatedVol) return a.accumulatedVol > b.accumulatedVol ? a : b;
         if ((a.lastSeenTradeAt || 0) !== (b.lastSeenTradeAt || 0)) return (a.lastSeenTradeAt || 0) > (b.lastSeenTradeAt || 0) ? a : b;
         // 체결이 없는 구간에도 EWMA 는 계속 전진하므로, 더 최근까지 갱신된 쪽을 살린다.
@@ -233,6 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         speedEwma: Math.max(0, Number(t.speedEwma) || 0),
                         speedEwmaAt: Number(t.speedEwmaAt) || startTime,
                         pendingVol: Math.max(0, Number(t.pendingVol) || 0),
+                        manualEditAt: Number(t.manualEditAt) || 0,
                         historicalAnalysis: baseAnalysis()
                     };
                 })
@@ -627,7 +637,53 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="daily-body">${body}</div>
                     </details>`;
     };
-    const renderCards = () => {
+    // 남은 수량을 직접 고치는 인라인 편집 패널
+    const buildEditPanel = (tracker) => {
+        const isKrw = editingUnit === 'KRW';
+        const current = isKrw
+            ? Math.round(tracker.remainingQty * tracker.targetPrice)
+            : Math.round(tracker.remainingQty);
+        return `
+                    <div class="card-panel edit-panel">
+                        <div class="edit-head">
+                            <span class="metric-label">남은 수량 수정</span>
+                            <div class="edit-units">
+                                <button type="button" class="edit-unit${isKrw ? ' is-active' : ''}" onclick="setEditUnit('KRW')">원화</button>
+                                <button type="button" class="edit-unit${isKrw ? '' : ' is-active'}" onclick="setEditUnit('COIN')">개수</button>
+                            </div>
+                        </div>
+                        <div class="edit-field">
+                            <input type="number" id="edit-qty-input" class="edit-input" value="${current}" step="any" min="0"
+                                inputmode="decimal" oninput="updateEditPreview(${tracker.id})"
+                                onkeydown="if(event.key==='Enter'){event.preventDefault();saveEditTracker(${tracker.id});}if(event.key==='Escape'){cancelEditTracker();}">
+                            <span class="edit-unit-postfix">${isKrw ? '원' : '개'}</span>
+                        </div>
+                        <div id="edit-preview" class="edit-preview">${buildEditPreview(tracker, current)}</div>
+                        <p id="edit-error" class="edit-error"></p>
+                        <div class="edit-actions">
+                            <button type="button" class="edit-btn edit-btn-ghost" onclick="cancelEditTracker()">취소</button>
+                            <button type="button" class="edit-btn edit-btn-primary" onclick="saveEditTracker(${tracker.id})">저장</button>
+                        </div>
+                    </div>`;
+    };
+    const buildEditPreview = (tracker, rawValue) => {
+        const raw = Number(rawValue);
+        if (!Number.isFinite(raw) || raw <= 0) return '값을 입력하세요.';
+        const qty = editingUnit === 'KRW' ? raw / tracker.targetPrice : raw;
+        if (!Number.isFinite(qty) || qty <= 0) return '값을 입력하세요.';
+        return editingUnit === 'KRW'
+            ? `= ${fmtNum(qty)} 개`
+            : `= ${fmtKrwValue(qty, tracker.targetPrice)}`;
+    };
+    const focusEditInput = () => {
+        const input = document.getElementById('edit-qty-input');
+        if (!input) return;
+        input.focus();
+        input.select();
+    };
+    const renderCards = (options) => {
+        // 수정 중에는 폴링이 부르는 재렌더링을 건너뛴다 (입력값 보호).
+        if (editingTrackerId !== null && !(options && options.force)) return;
         if (trackers.length === 0 && trackerFormCollapsed) {
             trackerFormCollapsed = false;
         }
@@ -669,10 +725,16 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <span><span class="tracker-meta-key">완료 예상</span><span class="tracker-meta-eta">${etaLabel}</span></span>
                             </div>
                         </div>
-                        <button type="button" onclick="removeTracker(${tracker.id})" class="tracker-delete-btn" aria-label="${tracker.coin} 추적 삭제">
-                            <span class="material-icons text-[20px]">delete_outline</span>
-                        </button>
+                        <div class="tracker-actions">
+                            <button type="button" onclick="startEditTracker(${tracker.id})" class="tracker-icon-btn" aria-label="${tracker.coin} 수량 수정">
+                                <span class="material-icons text-[20px]">edit</span>
+                            </button>
+                            <button type="button" onclick="removeTracker(${tracker.id})" class="tracker-icon-btn tracker-delete-btn" aria-label="${tracker.coin} 추적 삭제">
+                                <span class="material-icons text-[20px]">delete_outline</span>
+                            </button>
+                        </div>
                     </div>
+                    ${editingTrackerId === tracker.id ? buildEditPanel(tracker) : `
                     <div class="card-panel">
                         <div class="metric-row">
                             <span class="metric-label">남은 수량<span class="metric-chip">잔량 ${remainingRatio.toFixed(1)}%</span></span>
@@ -688,7 +750,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span class="metric-foot-key">초기 ${fmtNum(tracker.initialQty)} 개</span>
                             <span class="metric-foot-krw">${fmtKrwValue(tracker.initialQty, tracker.targetPrice)}</span>
                         </div>
-                    </div>
+                    </div>`}
                     <div class="card-panel">
                         <div class="metric-row">
                             <span class="metric-label">누적 차감 물량</span>
@@ -727,9 +789,56 @@ document.addEventListener('DOMContentLoaded', () => {
         if (changed) saveTrackers();
         renderCards();
     };
+    window.startEditTracker = (id) => {
+        if (!trackers.some((item) => item.id === id)) return;
+        editingTrackerId = id;
+        editingUnit = document.querySelector('input[name="input_type"]:checked')?.value === 'COIN' ? 'COIN' : 'KRW';
+        renderCards({ force: true });
+        focusEditInput();
+    };
+    window.cancelEditTracker = () => {
+        editingTrackerId = null;
+        renderCards({ force: true });
+    };
+    window.setEditUnit = (unit) => {
+        editingUnit = unit === 'COIN' ? 'COIN' : 'KRW';
+        renderCards({ force: true });
+        focusEditInput();
+    };
+    window.updateEditPreview = (id) => {
+        const tracker = trackers.find((item) => item.id === id);
+        const input = document.getElementById('edit-qty-input');
+        const preview = document.getElementById('edit-preview');
+        if (!tracker || !input || !preview) return;
+        preview.textContent = buildEditPreview(tracker, input.value);
+    };
+    window.saveEditTracker = (id) => {
+        const tracker = trackers.find((item) => item.id === id);
+        const input = document.getElementById('edit-qty-input');
+        const errorEl = document.getElementById('edit-error');
+        if (!tracker || !input) return;
+        const raw = Number(input.value);
+        const qty = editingUnit === 'KRW' ? raw / Number(tracker.targetPrice) : raw;
+        if (!Number.isFinite(raw) || raw < 0 || !Number.isFinite(qty) || qty < 0) {
+            if (errorEl) errorEl.textContent = '0 이상의 숫자를 입력해주세요.';
+            return;
+        }
+        tracker.remainingQty = qty;
+        // 카드 안 숫자가 서로 어긋나지 않도록 초기 물량을 보정한다.
+        // (초기 = 지금 남은 양 + 추적 시작 후 실제로 체결된 양)
+        // 단 0 이 되면 normalizeTrackers 가 트래커를 버리므로 그때는 기존 값을 유지한다.
+        const nextInitial = qty + tracker.accumulatedVol;
+        if (nextInitial > 0) tracker.initialQty = nextInitial;
+        tracker.manualEditAt = Date.now();
+        editingTrackerId = null;
+        saveTrackers();
+        renderCards({ force: true });
+    };
     window.removeTracker = (id) => {
         const tracker = trackers.find((item) => item.id === id);
         if (!tracker) return;
+        // 수정 중인 카드를 지우는 경우 편집 상태를 먼저 풀어야 재렌더링이 막히지 않는다.
+        if (editingTrackerId === id) editingTrackerId = null;
         const confirmed = window.confirm(`${tracker.coin} ${Number(tracker.targetPrice).toFixed(4)} KRW 추적 덱을 정말 삭제할까요?\n삭제한 추적 데이터는 복구되지 않습니다.`);
         if (!confirmed) return;
         trackers = trackers.filter((item) => item.id !== id);
@@ -789,7 +898,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setAddTrackerButtonState(true);
         const startTime = Date.now();
         const trackerId = Date.now();
-        trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, dailyVolumes: {}, matchedTrades: 0, speedEwma: 0, speedEwmaAt: startTime, pendingVol: 0, historicalAnalysis: baseAnalysis() }, ...trackers];
+        trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, dailyVolumes: {}, matchedTrades: 0, speedEwma: 0, speedEwmaAt: startTime, pendingVol: 0, manualEditAt: 0, historicalAnalysis: baseAnalysis() }, ...trackers];
         saveTrackers();
         renderCards();
         targetAmountInput.value = '';

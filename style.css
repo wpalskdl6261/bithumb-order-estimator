@@ -79,7 +79,13 @@ body {
 .tracker-form-summary {
     min-height: 18px;
 }
-.tracker-delete-btn {
+.tracker-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+.tracker-icon-btn {
     width: 40px;
     height: 40px;
     flex: 0 0 40px;
@@ -95,14 +101,22 @@ body {
     color: #64748b;
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
 }
+.tracker-icon-btn:hover {
+    color: #f8b06b;
+    border-color: rgba(243, 115, 33, 0.24);
+    background: rgba(243, 115, 33, 0.08);
+    transform: translateY(-1px);
+}
+.tracker-icon-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(243, 115, 33, 0.18);
+}
 .tracker-delete-btn:hover {
     color: #fda4af;
     border-color: rgba(244, 63, 94, 0.24);
     background: rgba(127, 29, 29, 0.16);
-    transform: translateY(-1px);
 }
 .tracker-delete-btn:focus-visible {
-    outline: none;
     box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.18);
 }
 .progress-bar-fill {
@@ -285,6 +299,131 @@ input[type="number"]:focus {
     border-radius: 100px;
     overflow: hidden;
     border: 1px solid rgba(255,255,255,0.05);
+}
+
+/* 남은 수량 수정 */
+.edit-panel {
+    border-color: rgba(243, 115, 33, 0.28);
+    background: linear-gradient(135deg, rgba(243, 115, 33, 0.08) 0%, rgba(11, 15, 21, 0.9) 100%);
+}
+.edit-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.edit-units {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(0,0,0,0.35);
+}
+.edit-unit {
+    padding: 4px 12px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+.edit-unit.is-active {
+    background: rgba(243, 115, 33, 0.18);
+    color: #f8b06b;
+}
+.edit-field {
+    position: relative;
+    margin-top: 12px;
+}
+.edit-input {
+    width: 100%;
+    padding: 12px 44px 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(243, 115, 33, 0.3);
+    background: #0b0f15;
+    color: #ffffff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 16px; /* iOS 에서 16px 미만이면 포커스 시 화면이 확대된다 */
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+/* 네이티브 증감 화살표가 단위 표시("원"/"개")와 겹치므로 숨긴다 */
+.edit-input::-webkit-outer-spin-button,
+.edit-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.edit-input {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+.edit-input:focus {
+    outline: none;
+    border-color: #f37321;
+    box-shadow: 0 0 0 3px rgba(243, 115, 33, 0.16);
+}
+.edit-unit-postfix {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+    pointer-events: none;
+}
+.edit-preview {
+    margin-top: 8px;
+    color: #f8b06b;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.edit-error {
+    margin: 6px 0 0;
+    min-height: 0;
+    color: #fda4af;
+    font-size: 11px;
+    font-weight: 600;
+}
+.edit-error:empty {
+    display: none;
+}
+.edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+.edit-btn {
+    flex: 1;
+    padding: 11px 14px;
+    border-radius: 14px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+.edit-btn:active {
+    transform: scale(0.97);
+}
+.edit-btn-ghost {
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(11, 15, 21, 0.9);
+    color: #cbd5e1;
+}
+.edit-btn-ghost:hover {
+    border-color: rgba(255,255,255,0.16);
+    color: #ffffff;
+}
+.edit-btn-primary {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: linear-gradient(135deg, rgba(243, 115, 33, 0.95) 0%, rgba(212, 93, 20, 0.9) 100%);
+    color: #ffffff;
 }
 
 /* 예상 체결까지 */
