@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const POLL_INTERVAL_MS = 3000;
     const MAX_PROCESSED_KEYS = 240;
     const PRICE_MATCH_TOLERANCE = 0.00005;
-    const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004 };
+    const DEFAULT_PRICE_BY_COIN = { NFT: 0.0004, BTT: 0.0004, NEX: 0.0010 };
     const MAX_DAILY_BUCKETS = 180;
     const STORAGE_BACKUP_KEY = 'bithumb_trackers_v2_backup';
     const STORAGE_DB_NAME = 'bithumb-estimator-db';
@@ -45,6 +45,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedCoin = document.querySelector('input[name="coin"]:checked')?.value || 'NFT';
     // 날짜별 체결량 패널이 펼쳐진 트래커 id. 3초마다 카드가 다시 그려져도 열린 상태를 유지한다.
     const expandedDailyIds = new Set();
+    // 날짜별 패널 안쪽 스크롤 위치 (트래커 id -> scrollTop). 카드를 다시 그리면 패널 요소가
+    // 새로 만들어져 스크롤이 맨 위로 돌아가므로, 기억해 뒀다가 렌더링 직후 되돌린다.
+    const dailyScrollTops = new Map();
+    // 사용자가 패널을 스크롤 중이면 재렌더링을 잠시 미룬다 (모바일 관성 스크롤이 끊기지 않게).
+    let lastDailyScrollAt = 0;
+    const DAILY_SCROLL_IDLE_MS = 1200;
     // 수량 수정 중인 트래커 id 와 입력 단위. 수정 중에는 자동 재렌더링을 멈춰
     // 입력하던 값과 커서가 3초마다 날아가지 않게 한다.
     let editingTrackerId = null;
@@ -682,8 +688,11 @@ document.addEventListener('DOMContentLoaded', () => {
         input.select();
     };
     const renderCards = (options) => {
+        const force = Boolean(options && options.force);
         // 수정 중에는 폴링이 부르는 재렌더링을 건너뛴다 (입력값 보호).
-        if (editingTrackerId !== null && !(options && options.force)) return;
+        if (editingTrackerId !== null && !force) return;
+        // 날짜별 패널을 스크롤하는 중이면 다음 폴링으로 미룬다 (관성 스크롤 보호).
+        if (!force && Date.now() - lastDailyScrollAt < DAILY_SCROLL_IDLE_MS) return;
         if (trackers.length === 0 && trackerFormCollapsed) {
             trackerFormCollapsed = false;
         }
@@ -768,6 +777,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             `;
         }).join('');
+        restoreDailyScroll();
+    };
+    // 새로 그려진 날짜별 패널에 직전 스크롤 위치를 되돌려 놓는다.
+    const restoreDailyScroll = () => {
+        trackerListEl.querySelectorAll('.daily-details[open]').forEach((details) => {
+            const top = dailyScrollTops.get(Number(details.dataset.trackerId));
+            const body = details.querySelector('.daily-body');
+            if (body && top > 0) body.scrollTop = top;
+        });
     };
     const pollTransactions = async () => {
         if (trackers.length === 0) return;
@@ -845,7 +863,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // 삭제 기록을 남겨야 다른 탭/저장소에서 병합될 때 되살아나지 않는다.
         deletedIds = mergeTombstones(deletedIds, new Map([[String(id), Date.now()]]));
         saveTrackers({ allowEmpty: true });
-        renderCards();
+        dailyScrollTops.delete(id);
+        renderCards({ force: true });
     };
     // toggle 이벤트는 버블링되지 않으므로 캡처 단계에서 잡는다.
     if (trackerListEl) {
@@ -855,7 +874,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const id = Number(details.dataset.trackerId);
             if (!Number.isFinite(id)) return;
             if (details.open) expandedDailyIds.add(id);
-            else expandedDailyIds.delete(id);
+            else {
+                expandedDailyIds.delete(id);
+                dailyScrollTops.delete(id); // 접었다 다시 펴면 맨 위부터
+            }
+        }, true);
+        // scroll 이벤트도 버블링되지 않으므로 캡처 단계에서 받는다.
+        trackerListEl.addEventListener('scroll', (event) => {
+            const body = event.target;
+            if (!body.classList?.contains('daily-body')) return;
+            const id = Number(body.closest('.daily-details')?.dataset.trackerId);
+            if (!Number.isFinite(id)) return;
+            // 렌더링 직후 위치를 되돌리면서 생긴 이벤트는 사용자 스크롤로 치지 않는다.
+            if (dailyScrollTops.get(id) === body.scrollTop) return;
+            dailyScrollTops.set(id, body.scrollTop);
+            lastDailyScrollAt = Date.now();
         }, true);
     }
     // 다른 탭에서 변경된 내용을 즉시 반영 (탭 간 상태가 어긋나 서로 덮어쓰는 것을 방지)
@@ -900,7 +933,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const trackerId = Date.now();
         trackers = [{ id: trackerId, coin, targetPrice: price, initialQty: qty, remainingQty: qty, accumulatedVol: 0, startTime, processedTradeKeys: [], lastSeenTradeAt: startTime, lastMatchedAt: 0, dailyVolumes: {}, matchedTrades: 0, speedEwma: 0, speedEwmaAt: startTime, pendingVol: 0, manualEditAt: 0, historicalAnalysis: baseAnalysis() }, ...trackers];
         saveTrackers();
-        renderCards();
+        renderCards({ force: true });
         targetAmountInput.value = '';
         calculateSyncCompact();
         setTrackerFormCollapsed(true);
