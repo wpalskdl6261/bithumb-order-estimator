@@ -464,6 +464,43 @@ input[type="number"]:focus {
     color: #ffffff;
 }
 
+/* 체결 내역 수신 실패 경고 */
+.poll-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    border: 1px solid rgba(251, 191, 36, 0.3);
+    background: rgba(251, 191, 36, 0.08);
+}
+.poll-warning-icon {
+    flex: 0 0 20px;
+    width: 20px;
+    overflow: hidden;
+    margin-top: 1px;
+    color: #fbbf24;
+    font-size: 20px;
+}
+.poll-warning-text {
+    min-width: 0;
+}
+.poll-warning-title {
+    color: #fde68a;
+    font-size: 12.5px;
+    font-weight: 800;
+    line-height: 1.4;
+}
+.poll-warning-detail {
+    margin-top: 3px;
+    color: #cbd5e1;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.5;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+}
+
 /* 예상 체결까지 */
 .eta-panel {
     display: flex;

@@ -51,6 +51,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // 사용자가 패널을 스크롤 중이면 재렌더링을 잠시 미룬다 (모바일 관성 스크롤이 끊기지 않게).
     let lastDailyScrollAt = 0;
     const DAILY_SCROLL_IDLE_MS = 1200;
+    // 코인별 체결 내역 수신 상태. 빗썸이 오류를 돌려줘도 예전에는 조용히 넘어가서
+    // 티커가 틀리거나 네트워크가 끊겨도 카드가 "수집 중"에 멈춰 있을 뿐이었다.
+    // { failCount, lastOkAt, kind: 'api' | 'http' | 'network', code, message }
+    const pollStatusByCoin = {};
+    // 모바일에선 한두 번 실패가 흔하므로 연속 실패가 이만큼 쌓였을 때만 경고한다 (약 10초).
+    const POLL_FAIL_THRESHOLD = 3;
     // 수량 수정 중인 트래커 id 와 입력 단위. 수정 중에는 자동 재렌더링을 멈춰
     // 입력하던 값과 커서가 3초마다 날아가지 않게 한다.
     let editingTrackerId = null;
@@ -94,6 +100,48 @@ document.addEventListener('DOMContentLoaded', () => {
         const d = new Date(ms);
         if (!Number.isFinite(ms) || Number.isNaN(d.getTime())) return '-';
         return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+    const formatAgo = (ms) => {
+        const diff = Date.now() - ms;
+        if (diff < 60000) return '방금';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}분 전`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}시간 전`;
+        return formatShortDate(ms);
+    };
+    // 외부(빗썸) 응답 문자열을 innerHTML 에 넣기 전에 이스케이프한다.
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+    // 체결 내역을 연속으로 못 받고 있을 때 카드 상단에 띄우는 경고
+    const buildPollWarning = (coin) => {
+        const status = pollStatusByCoin[coin];
+        if (!status || status.failCount < POLL_FAIL_THRESHOLD) return '';
+        let title;
+        let detail;
+        if (status.kind === 'api') {
+            title = '빗썸에서 체결 내역을 받지 못하고 있습니다';
+            const reason = status.message ? `${status.message} (${status.code})` : `오류 코드 ${status.code}`;
+            detail = `빗썸 응답: ${reason} · ${coin}_KRW 마켓이 맞는지 확인해 주세요`;
+        } else if (status.kind === 'http') {
+            title = '빗썸 서버가 응답하지 않습니다';
+            detail = `HTTP ${status.code} · 잠시 후 자동으로 다시 시도합니다`;
+        } else if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            title = '인터넷 연결이 끊겨 있습니다';
+            detail = '연결되면 자동으로 다시 받아옵니다';
+        } else {
+            title = '네트워크 오류로 체결 내역을 받지 못하고 있습니다';
+            detail = '잠시 후 자동으로 다시 시도합니다';
+        }
+        const last = status.lastOkAt > 0 ? `마지막 수신 ${formatAgo(status.lastOkAt)}` : '아직 한 번도 받지 못함';
+        return `
+                    <div class="poll-warning" role="status">
+                        <span class="material-icons poll-warning-icon" aria-hidden="true">warning_amber</span>
+                        <div class="poll-warning-text">
+                            <div class="poll-warning-title">${escapeHtml(title)}</div>
+                            <div class="poll-warning-detail">${escapeHtml(detail)}</div>
+                            <div class="poll-warning-detail">${escapeHtml(last)} · 이 동안의 체결은 예상 시간에 반영되지 않습니다</div>
+                        </div>
+                    </div>`;
     };
     const formatDayLabel = (key) => {
         const [year, month, day] = key.split('-').map(Number);
@@ -742,7 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <span class="material-icons text-[20px]">delete_outline</span>
                             </button>
                         </div>
-                    </div>
+                    </div>${buildPollWarning(tracker.coin)}
                     ${editingTrackerId === tracker.id ? buildEditPanel(tracker) : `
                     <div class="card-panel">
                         <div class="metric-row">
@@ -793,12 +841,27 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const coin of [...new Set(trackers.map((tracker) => tracker.coin))]) {
             try {
                 const response = await fetch(`https://api.bithumb.com/public/transaction_history/${coin}_KRW?count=100`);
+                if (!response.ok) {
+                    // 빗썸이 4xx 와 함께 오류 JSON 을 줄 때는 그 사유(예: 잘못된 티커)를 살려서 보여준다.
+                    const body = await response.json().catch(() => null);
+                    if (body && body.status) {
+                        recordPollFailure(coin, { kind: 'api', code: body.status, message: body.message });
+                    } else {
+                        recordPollFailure(coin, { kind: 'http', code: response.status });
+                    }
+                    continue;
+                }
                 const json = await response.json();
-                if (json.status !== '0000' || !Array.isArray(json.data)) continue;
+                if (json.status !== '0000' || !Array.isArray(json.data)) {
+                    recordPollFailure(coin, { kind: 'api', code: json.status, message: json.message });
+                    continue;
+                }
+                recordPollSuccess(coin);
                 const trades = buildTrades(coin, json.data);
                 if (applyTrades(coin, trades)) changed = true;
             } catch (error) {
                 console.error(`poll failed: ${coin}`, error);
+                recordPollFailure(coin, { kind: 'network' });
             }
         }
         // 체결이 없던 폴링도 EWMA 를 전진시켜야 조용한 구간에서 속도가 감쇠한다.
@@ -806,6 +869,13 @@ document.addEventListener('DOMContentLoaded', () => {
         trackers.forEach((tracker) => stepSpeedState(tracker, now));
         if (changed) saveTrackers();
         renderCards();
+    };
+    const recordPollSuccess = (coin) => {
+        pollStatusByCoin[coin] = { failCount: 0, lastOkAt: Date.now() };
+    };
+    const recordPollFailure = (coin, detail) => {
+        const prev = pollStatusByCoin[coin] || { failCount: 0, lastOkAt: 0 };
+        pollStatusByCoin[coin] = { ...detail, failCount: prev.failCount + 1, lastOkAt: prev.lastOkAt };
     };
     window.startEditTracker = (id) => {
         if (!trackers.some((item) => item.id === id)) return;
